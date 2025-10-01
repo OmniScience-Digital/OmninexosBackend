@@ -72,3 +72,5 @@ $RECYCLE.BIN/
 #dev folder ignore
 /src/z/
 src/z/
+
+setup.md
