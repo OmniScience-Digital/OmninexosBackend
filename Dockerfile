@@ -10,8 +10,8 @@ RUN npm install
 # Copy app source
 COPY . .
 
-# Build and copy assets
-RUN npm run build && cp -r src/assets dist/assets
+# Build 
+RUN npm run build 
 
 EXPOSE 5001
 
