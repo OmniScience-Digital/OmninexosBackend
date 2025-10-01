@@ -1,0 +1,43 @@
+services:
+  api:
+    build: .
+    ports:
+      - "5001:5001"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+    restart: always
+    depends_on:
+      - redis
+    command: ["node", "dist/server.js"]
+    working_dir: /src
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    restart: always
+
+
+# services:
+#   api:
+#     build: .
+#     ports:
+#       - "5001:5001"
+#     env_file: .env
+#     environment:
+#       - NODE_ENV=production
+#       - REDIS_HOST=redis
+#     restart: always
+#     depends_on:
+#       - redis
+#     working_dir: /src
+
+#   redis:
+#     image: redis:latest
+#     ports:
+#       - "6379:6379"
+#     restart: unless-stopped
+
+
