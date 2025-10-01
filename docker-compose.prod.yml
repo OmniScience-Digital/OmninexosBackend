@@ -8,16 +8,10 @@ services:
       - NODE_ENV=production
       - REDIS_HOST=redis
     restart: always
-    depends_on:
-      - redis
     command: ["node", "dist/server.js"]
     working_dir: /src
 
-  redis:
-    image: redis:latest
-    ports:
-      - "6379:6379"
-    restart: always
+
 
 
 # services:
