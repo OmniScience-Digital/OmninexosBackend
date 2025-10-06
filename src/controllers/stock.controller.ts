@@ -6,8 +6,8 @@ export const stockControllerRouter = async (req: Request, res: Response) => {
   try {
     logger.info('Executing stock control route.');
 
-    console.log('Full request body:');
-    console.log(JSON.stringify(req.body, null, 2));
+    // console.log('Full request body:');
+    // console.log(JSON.stringify(req.body, null, 2));
 
     const payload = parseClickUpPayload(req.body);
 
@@ -26,36 +26,60 @@ export const stockControllerRouter = async (req: Request, res: Response) => {
   }
 };
 
+
+
 function parseClickUpPayload(clickupPayload: any) {
   const { payload } = clickupPayload;
 
-  // Extract description text
   const description = payload.text_content;
+  const lines = description.split("\n").filter(Boolean);
 
-  // Break into subcomponents
-  const lines = description.split('\n').filter(Boolean);
-  const subComponents: Record<string, { value: number; isWithdrawal: boolean }> = {};
+  const result: Record<string, any> = {};
+  let username = "Unknown";
 
-  for (let i = 0; i < lines.length; i += 2) {
-    const keyLine = lines[i].replace('Key: ', '').trim();
-    const valueLine = lines[i + 1].replace('Value: ', '').trim();
+  // Detect Withdrawal field dynamically
+  const withdrawalField = payload.fields.find((f: any) =>
+    typeof f.value === "string" && f.value.toLowerCase().includes("withdrawal")
+  );
 
-    subComponents[keyLine] = {
-      value: Number(valueLine),
-      // read from custom_fields: Intake vs Withdrawal
-      isWithdrawal:
-        payload.fields.find((f: any) => f.field_id === '0714e91c-fb89-43b7-b8f0-deb3d1b4d973')
-          ?.value === 'Withdrawal',
-    };
+  // Detect user field dynamically (assuming it’s an email or anything not "Intake"/"Withdrawal")
+  const userField = payload.fields.find((f: any) =>
+    typeof f.value === "string" &&
+    !["withdrawal", "intake"].includes(f.value.toLowerCase().trim())
+  );
+
+  if (userField) username = userField.value;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // Detect "Category, Subcategory" line
+    if (line.includes(",")) {
+      const [categoryName, subCategoryName] = line.split(",").map((s: string) => s.trim());
+
+      if (!result[categoryName]) result[categoryName] = {};
+      if (!result[categoryName][subCategoryName]) {
+        result[categoryName][subCategoryName] = {
+          isWithdrawal: withdrawalField ? true : false,
+          subComponents: {},
+        };
+      }
+
+      const keyLine = lines[i + 1]?.replace("Key: ", "").trim();
+      const valueLine = lines[i + 2]?.replace("Value: ", "").trim();
+
+      if (keyLine && valueLine) {
+        result[categoryName][subCategoryName].subComponents[keyLine] = {
+          value: Number(valueLine),
+        };
+      }
+
+      i += 2; // Skip Key/Value lines
+    }
   }
 
-  // Extract username from fields
-  const username =
-    payload.fields.find((f: any) => f.field_id === 'daf6f996-8096-473b-b9e4-9e20f4568d63')?.value ||
-    'Unknown';
-
   return {
-    [payload.name]: subComponents,
+    ...result,
     username,
   };
 }

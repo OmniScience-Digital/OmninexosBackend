@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import fetch from 'node-fetch';
 import logger from '../utils/logger';
+import { getJhbTimestamp } from '../helper/time/time.helper';
 
 // ClickUp env variables
 const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
@@ -37,51 +38,129 @@ export const clickUpRouter = async (req: Request, res: Response): Promise<void> 
 
 // Create a task for each subcomponent in payload
 
+// async function createTasks(payload: any, username: string) {
+//   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
+//   const result = payload.result;
+
+//   console.log(result);
+
+//   for (const categoryName of Object.keys(result)) {
+//     const category = result[categoryName];
+
+//     // Loop subcategories
+//     for (const subCategoryName of Object.keys(category)) {
+//       const subCategory = category[subCategoryName];
+
+//       // Handle subComponents whether it's an array or object
+//       const subComponents = subCategory.subComponents || {};
+//       const descriptionLines = Array.isArray(subComponents)
+//         ? subComponents.map(
+//           (sub: any) => `Key: ${sub.key}\nValue: ${sub.value}`
+//         )
+//         : Object.entries(subComponents).map(
+//           ([key, sub]: [string, any]) => `Key: ${key}\nValue: ${sub.value}`
+//         );
+
+//       const hasWithdrawal = subCategory.isWithdrawal === true;
+
+//       const datetime = getJhbTimestamp();
+//       const heading = hasWithdrawal ? "Withdrawal" : "Intake";
+
+
+//       const topic = `Stock Action, ${heading} @ ${datetime}`;
+
+//       const body = {
+//         name: `${topic}`,
+//         description: `${categoryName}, ${subCategoryName}\n${descriptionLines.join("\n\n")}`,
+//         priority: 3,
+//         custom_fields: [
+//           {
+//             id: INTAKE_WITHDRAWAL_FIELD_ID,
+//             value: hasWithdrawal ? "Withdrawal" : "Intake",
+//           },
+//           {
+//             id: USERNAME_FIELD_ID,
+//             value: username
+//           },
+//         ],
+//         status: "to do",
+//       };
+
+//       // Uncomment to send
+//       const res = await fetch(url, {
+//         method: "POST",
+//         headers: {
+//           Authorization: API_TOKEN,
+//           "Content-Type": "application/json",
+//         },
+//         body: JSON.stringify(body),
+//       });
+//       const data = await res.json();
+//       console.log("Task created with custom fields:", data);
+//     }
+//   }
+// }
+
+
 async function createTasks(payload: any, username: string) {
   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
   const result = payload.result;
 
-  for (const componentName of Object.keys(result)) {
-    const component = result[componentName];
+  let descriptionLines: string[] = [];
+  let anyWithdrawal = false;
 
-    // Correctly pull subComponents
-    const subComponents = component.subComponents || {};
+  const datetime = getJhbTimestamp();
+  let topic = `Stock Action @ ${datetime}`;
 
-    // Build description lines
-    const descriptionLines = Object.entries(subComponents).map(
-      ([subName, sub]: [string, any]) => `Key: ${subName}\nValue: ${sub.value}`
-    );
+  for (const categoryName of Object.keys(result)) {
+    const category = result[categoryName];
 
-    // Pull withdrawal flag from the component
-    const hasWithdrawal = component.isWithdrawal === true;
+    for (const subCategoryName of Object.keys(category)) {
+      const subCategory = category[subCategoryName];
+      const subComponents = subCategory.subComponents || {};
 
-    const body = {
-      name: componentName,
-      description: descriptionLines.join('\n\n'),
-      priority: 3,
-      custom_fields: [
-        {
-          id: INTAKE_WITHDRAWAL_FIELD_ID,
-          value: hasWithdrawal ? 'Withdrawal' : 'Intake',
-        },
-        {
-          id: USERNAME_FIELD_ID,
-          value: username,
-        },
-      ],
-      status: 'to do',
-    };
+      const subLines = Array.isArray(subComponents)
+        ? subComponents.map((sub: any) => `Key: ${sub.key}\nValue: ${sub.value}`)
+        : Object.entries(subComponents).map(
+            ([key, sub]: [string, any]) => `Key: ${key}\nValue: ${sub.value}`
+          );
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: API_TOKEN,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+      // Add each subcategory to description
+      descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join("\n")}`);
 
-    const data = await res.json();
-    console.log('Task created with custom fields:', data);
+      if (subCategory.isWithdrawal) anyWithdrawal = true;
+    }
   }
+
+  // Add Withdrawal/Intake to topic
+  topic = anyWithdrawal ? `Stock Action, Withdrawal @ ${datetime}` : `Stock Action, Intake @ ${datetime}`;
+
+  const body = {
+    name: topic,
+    description: descriptionLines.join("\n\n"),
+    priority: 3,
+    custom_fields: [
+      {
+        id: INTAKE_WITHDRAWAL_FIELD_ID,
+        value: anyWithdrawal ? "Withdrawal" : "Intake",
+      },
+      {
+        id: USERNAME_FIELD_ID,
+        value: username,
+      },
+    ],
+    status: "to do",
+  };
+
+  // Send task
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: API_TOKEN,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  console.log("Task created with custom fields:", data);
 }

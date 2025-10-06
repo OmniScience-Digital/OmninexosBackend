@@ -2,56 +2,51 @@ import 'dotenv/config';
 import {
   DynamoDBClient,
   QueryCommand,
-  UpdateItemCommand,
   PutItemCommand,
+  UpdateItemCommand,
 } from '@aws-sdk/client-dynamodb';
-import logger from '../utils/logger';
 
-const COMPONENTS_TABLE = process.env.COMPONENT_TABLE;
-const SUBCOMPONENTS_TABLE = process.env.SUBCOMPONENTS_TABLE;
+const CATEGORY_TABLE = process.env.CATEGORY_TABLE!;
+const SUBCATEGORY_TABLE = process.env.SUBCATEGORY_TABLE!;
+const SUBCOMPONENTS_TABLE = process.env.SUBCOMPONENTS_TABLE!;
 
-const clickupclient = new DynamoDBClient({
-  region: process.env.AWS_REGION as string,
+const dynamoClient = new DynamoDBClient({
+  region: process.env.AWS_REGION!,
   credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
   },
 });
 
-type Payload = Record<string, Record<string, { value: number; isWithdrawal: boolean }>> & {
-  username: string;
-};
-
-export async function updateComponents(payload: Payload) {
-  const { username, ...components } = payload;
+export async function updateComponents(payload: any) {
+  const { username, ...categories } = payload;
   const now = new Date().toISOString();
 
-  for (const componentName of Object.keys(components)) {
-    const subComponents = components[componentName];
+  for (const categoryName of Object.keys(categories)) {
+    const subCategories = categories[categoryName];
 
-    // 1. Find or create component
-    let componentId: string;
-
-    const queryRes = await clickupclient.send(
+    // 1. Find or create Category
+    let categoryId: string;
+    const catQuery = await dynamoClient.send(
       new QueryCommand({
-        TableName: COMPONENTS_TABLE,
-        IndexName: 'componentsByName',
-        KeyConditionExpression: '#n = :nameVal',
-        ExpressionAttributeNames: { '#n': 'name' },
-        ExpressionAttributeValues: { ':nameVal': { S: componentName } },
+        TableName: CATEGORY_TABLE,
+        IndexName: 'categoriesByCategoryName',
+        KeyConditionExpression: '#name = :nameVal',
+        ExpressionAttributeNames: { '#name': 'categoryName' },
+        ExpressionAttributeValues: { ':nameVal': { S: categoryName } },
       })
     );
 
-    if (queryRes.Items && queryRes.Items.length > 0) {
-      componentId = queryRes.Items[0].id.S!;
+    if (catQuery.Items && catQuery.Items.length > 0) {
+      categoryId = catQuery.Items[0].id.S!;
     } else {
-      componentId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-      await clickupclient.send(
+      categoryId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      await dynamoClient.send(
         new PutItemCommand({
-          TableName: COMPONENTS_TABLE,
+          TableName: CATEGORY_TABLE,
           Item: {
-            id: { S: componentId },
-            name: { S: componentName },
+            id: { S: categoryId },
+            categoryName: { S: categoryName },
             createdAt: { S: now },
             updatedAt: { S: now },
           },
@@ -59,52 +54,92 @@ export async function updateComponents(payload: Payload) {
       );
     }
 
-    // 2. Loop through subcomponents
-    for (const subName of Object.keys(subComponents)) {
-      const { value, isWithdrawal } = subComponents[subName];
+    // 2. Loop through SubCategories
+    for (const subName of Object.keys(subCategories)) {
+      const { isWithdrawal, subComponents } = subCategories[subName];
 
-      const subQuery = await clickupclient.send(
+      // Find or create SubCategory
+      let subcategoryId: string;
+      const subQuery = await dynamoClient.send(
         new QueryCommand({
-          TableName: SUBCOMPONENTS_TABLE,
-          IndexName: 'byComponentAndKey',
-          KeyConditionExpression: 'componentId = :cid AND #k = :keyVal',
-          ExpressionAttributeNames: { '#k': 'key' },
+          TableName: SUBCATEGORY_TABLE,
+          IndexName: 'subCategoriesByCategoryIdAndSubcategoryName',
+          KeyConditionExpression: 'categoryId = :cid AND subcategoryName = :subName',
           ExpressionAttributeValues: {
-            ':cid': { S: componentId },
-            ':keyVal': { S: subName },
+            ':cid': { S: categoryId },
+            ':subName': { S: subName },
           },
         })
       );
 
       if (subQuery.Items && subQuery.Items.length > 0) {
-        const sub = subQuery.Items[0];
-        const currentValue = Number(sub.value.N);
-        const newValue = isWithdrawal ? currentValue - value : currentValue + value;
-
-        await clickupclient.send(
-          new UpdateItemCommand({
-            TableName: SUBCOMPONENTS_TABLE,
-            Key: { id: { S: sub.id.S! } },
-            UpdateExpression: 'SET #v = :val, #updatedAt = :upd',
-            ExpressionAttributeNames: { '#v': 'value', '#updatedAt': 'updatedAt' },
-            ExpressionAttributeValues: { ':val': { N: newValue.toString() }, ':upd': { S: now } },
-          })
-        );
+        subcategoryId = subQuery.Items[0].id.S!;
       } else {
-        const subId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        await clickupclient.send(
+        subcategoryId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        await dynamoClient.send(
           new PutItemCommand({
-            TableName: SUBCOMPONENTS_TABLE,
+            TableName: SUBCATEGORY_TABLE,
             Item: {
-              id: { S: subId },
-              componentId: { S: componentId },
-              key: { S: subName },
-              value: { N: (isWithdrawal ? -value : value).toString() },
+              id: { S: subcategoryId },
+              categoryId: { S: categoryId },
+              subcategoryName: { S: subName },
               createdAt: { S: now },
               updatedAt: { S: now },
             },
           })
         );
+      }
+
+      // 3. Loop through components (subComponents)
+      for (const componentKey of Object.keys(subComponents)) {
+        const { value } = subComponents[componentKey];
+
+        const compQuery = await dynamoClient.send(
+          new QueryCommand({
+            TableName: SUBCOMPONENTS_TABLE,
+            IndexName: 'componentsBySubcategoryIdAndComponentId',
+            KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
+            ExpressionAttributeValues: {
+              ':sid': { S: subcategoryId },
+              ':cid': { S: componentKey },
+            },
+          })
+        );
+
+        if (compQuery.Items && compQuery.Items.length > 0) {
+          // Update currentStock
+          const existing = compQuery.Items[0];
+          const currentStock = Number(existing.currentStock.N);
+          const newStock = isWithdrawal ? currentStock - value : currentStock + value;
+
+          await dynamoClient.send(
+            new UpdateItemCommand({
+              TableName: SUBCOMPONENTS_TABLE,
+              Key: { id: { S: existing.id.S! } },
+              UpdateExpression: 'SET currentStock = :val, updatedAt = :upd',
+              ExpressionAttributeValues: {
+                ':val': { N: newStock.toString() },
+                ':upd': { S: now },
+              },
+            })
+          );
+        } else {
+          // Create component
+          const componentId = componentKey; // use key as componentId
+          await dynamoClient.send(
+            new PutItemCommand({
+              TableName: SUBCOMPONENTS_TABLE,
+              Item: {
+                id: { S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}` },
+                subcategoryId: { S: subcategoryId },
+                componentId: { S: componentId },
+                currentStock: { N: value.toString() },
+                createdAt: { S: now },
+                updatedAt: { S: now },
+              },
+            })
+          );
+        }
       }
     }
   }
