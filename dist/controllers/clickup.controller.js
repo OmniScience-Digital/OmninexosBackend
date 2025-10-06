@@ -103,7 +103,9 @@ async function createTasks(payload, username) {
         }
     }
     // Add Withdrawal/Intake to topic
-    topic = anyWithdrawal ? `Stock Action, Withdrawal @ ${datetime}` : `Stock Action, Intake @ ${datetime}`;
+    topic = anyWithdrawal
+        ? `Stock Action, Withdrawal @ ${datetime}`
+        : `Stock Action, Intake @ ${datetime}`;
     const body = {
         name: topic,
         description: descriptionLines.join("\n\n"),
