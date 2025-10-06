@@ -18,12 +18,22 @@ const dynamoClient = new DynamoDBClient({
   },
 });
 
+//Normalizer (preserve letters, numbers, dots, collapse spaces, lowercase)
+function normalizeKey(key: string): string {
+  return key
+    .trim()
+    .replace(/[^a-zA-Z0-9.]+/g, ' ') // keep letters, numbers, dots
+    .replace(/\s+/g, ' ') // collapse multiple spaces
+    .toLowerCase();
+}
+
 export async function updateComponents(payload: any) {
   const { username, ...categories } = payload;
   const now = new Date().toISOString();
 
-  for (const categoryName of Object.keys(categories)) {
-    const subCategories = categories[categoryName];
+  for (const rawCategoryName of Object.keys(categories)) {
+    const categoryName = normalizeKey(rawCategoryName); // ✅ normalize category
+    const subCategories = categories[rawCategoryName];
 
     // 1. Find or create Category
     let categoryId: string;
@@ -55,8 +65,9 @@ export async function updateComponents(payload: any) {
     }
 
     // 2. Loop through SubCategories
-    for (const subName of Object.keys(subCategories)) {
-      const { isWithdrawal, subComponents } = subCategories[subName];
+    for (const rawSubName of Object.keys(subCategories)) {
+      const subName = normalizeKey(rawSubName); // ✅ normalize subcategory
+      const { isWithdrawal, subComponents } = subCategories[rawSubName];
 
       // Find or create SubCategory
       let subcategoryId: string;
@@ -91,8 +102,9 @@ export async function updateComponents(payload: any) {
       }
 
       // 3. Loop through components (subComponents)
-      for (const componentKey of Object.keys(subComponents)) {
-        const { value } = subComponents[componentKey];
+      for (const rawKey of Object.keys(subComponents)) {
+        const componentKey = normalizeKey(rawKey); // ✅ normalize component
+        const { value } = subComponents[rawKey];
 
         const compQuery = await dynamoClient.send(
           new QueryCommand({
@@ -107,7 +119,6 @@ export async function updateComponents(payload: any) {
         );
 
         if (compQuery.Items && compQuery.Items.length > 0) {
-          // Update currentStock
           const existing = compQuery.Items[0];
           const currentStock = Number(existing.currentStock.N);
           const newStock = isWithdrawal ? currentStock - value : currentStock + value;
@@ -124,15 +135,15 @@ export async function updateComponents(payload: any) {
             })
           );
         } else {
-          // Create component
-          const componentId = componentKey; // use key as componentId
           await dynamoClient.send(
             new PutItemCommand({
               TableName: SUBCOMPONENTS_TABLE,
               Item: {
-                id: { S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}` },
+                id: {
+                  S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                },
                 subcategoryId: { S: subcategoryId },
-                componentId: { S: componentId },
+                componentId: { S: componentKey }, // ✅ normalized
                 currentStock: { N: value.toString() },
                 createdAt: { S: now },
                 updatedAt: { S: now },
