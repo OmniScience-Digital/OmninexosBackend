@@ -1,6 +1,6 @@
+import { DateTime } from "luxon";
 import fetch from "node-fetch";
 import logger from "../utils/logger.js";
-import { getJhbTimestamp } from "../helper/time/time.helper.js";
 // ClickUp env variables
 const API_TOKEN = process.env.CLICKUP_API_TOKEN;
 const LIST_ID = process.env.CLICKUP_LIST_ID;
@@ -28,58 +28,59 @@ export const clickUpRouter = async (req, res) => {
         });
     }
 };
-// Create a task for each subcomponent in payload
 // async function createTasks(payload: any, username: string) {
 //   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
 //   const result = payload.result;
-//   console.log(result);
+//   let descriptionLines: string[] = [];
+//   let anyWithdrawal = false;
+//   const datetime = getJhbTimestamp();
+//   let topic = `Stock Action @ ${datetime}`;
 //   for (const categoryName of Object.keys(result)) {
 //     const category = result[categoryName];
-//     // Loop subcategories
 //     for (const subCategoryName of Object.keys(category)) {
 //       const subCategory = category[subCategoryName];
-//       // Handle subComponents whether it's an array or object
 //       const subComponents = subCategory.subComponents || {};
-//       const descriptionLines = Array.isArray(subComponents)
-//         ? subComponents.map(
-//           (sub: any) => `Key: ${sub.key}\nValue: ${sub.value}`
-//         )
+//       const subLines = Array.isArray(subComponents)
+//         ? subComponents.map((sub: any) => `Key: ${sub.key}\nValue: ${sub.value}`)
 //         : Object.entries(subComponents).map(
-//           ([key, sub]: [string, any]) => `Key: ${key}\nValue: ${sub.value}`
-//         );
-//       const hasWithdrawal = subCategory.isWithdrawal === true;
-//       const datetime = getJhbTimestamp();
-//       const heading = hasWithdrawal ? "Withdrawal" : "Intake";
-//       const topic = `Stock Action, ${heading} @ ${datetime}`;
-//       const body = {
-//         name: `${topic}`,
-//         description: `${categoryName}, ${subCategoryName}\n${descriptionLines.join("\n\n")}`,
-//         priority: 3,
-//         custom_fields: [
-//           {
-//             id: INTAKE_WITHDRAWAL_FIELD_ID,
-//             value: hasWithdrawal ? "Withdrawal" : "Intake",
-//           },
-//           {
-//             id: USERNAME_FIELD_ID,
-//             value: username
-//           },
-//         ],
-//         status: "to do",
-//       };
-//       // Uncomment to send
-//       const res = await fetch(url, {
-//         method: "POST",
-//         headers: {
-//           Authorization: API_TOKEN,
-//           "Content-Type": "application/json",
-//         },
-//         body: JSON.stringify(body),
-//       });
-//       const data = await res.json();
-//       console.log("Task created with custom fields:", data);
+//             ([key, sub]: [string, any]) => `Key: ${key}\nValue: ${sub.value}`
+//           );
+//       // Add each subcategory to description
+//       descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join('\n')}`);
+//       if (subCategory.isWithdrawal) anyWithdrawal = true;
 //     }
 //   }
+//   // Add Withdrawal/Intake to topic
+//   topic = anyWithdrawal
+//     ? `Stock Action, Withdrawal @ ${datetime}`
+//     : `Stock Action, Intake @ ${datetime}`;
+//   const body = {
+//     name: topic,
+//     description: descriptionLines.join('\n\n'),
+//     priority: 3,
+//     custom_fields: [
+//       {
+//         id: INTAKE_WITHDRAWAL_FIELD_ID,
+//         value: anyWithdrawal ? 'Withdrawal' : 'Intake',
+//       },
+//       {
+//         id: USERNAME_FIELD_ID,
+//         value: username,
+//       },
+//     ],
+//     status: 'to do',
+//   };
+//   // Send task
+//   const res = await fetch(url, {
+//     method: 'POST',
+//     headers: {
+//       Authorization: API_TOKEN,
+//       'Content-Type': 'application/json',
+//     },
+//     body: JSON.stringify(body),
+//   });
+//   const data = await res.json();
+//   console.log('Task created with custom fields:', data);
 // }
 async function createTasks(payload, username) {
     const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
@@ -87,23 +88,20 @@ async function createTasks(payload, username) {
     let descriptionLines = [];
     let anyWithdrawal = false;
     const datetime = getJhbTimestamp();
-    let topic = `Stock Action @ ${datetime}`;
     for (const categoryName of Object.keys(result)) {
         const category = result[categoryName];
         for (const subCategoryName of Object.keys(category)) {
             const subCategory = category[subCategoryName];
             const subComponents = subCategory.subComponents || {};
             const subLines = Array.isArray(subComponents)
-                ? subComponents.map((sub) => `Key: ${sub.key}\nValue: ${sub.value}`)
-                : Object.entries(subComponents).map(([key, sub]) => `Key: ${key}\nValue: ${sub.value}`);
-            // Add each subcategory to description
-            descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join("\n")}`);
+                ? subComponents.map((sub) => `Key: ${normalize(sub.key)}\nValue: ${normalize(sub.value)}`)
+                : Object.entries(subComponents).map(([key, sub]) => `Key: ${normalize(key)}\nValue: ${normalize(sub.value)}`);
+            descriptionLines.push(`${normalize(categoryName)}, ${normalize(subCategoryName)}\n${subLines.join("\n")}`);
             if (subCategory.isWithdrawal)
                 anyWithdrawal = true;
         }
     }
-    // Add Withdrawal/Intake to topic
-    topic = anyWithdrawal
+    const topic = anyWithdrawal
         ? `Stock Action, Withdrawal @ ${datetime}`
         : `Stock Action, Intake @ ${datetime}`;
     const body = {
@@ -117,12 +115,11 @@ async function createTasks(payload, username) {
             },
             {
                 id: USERNAME_FIELD_ID,
-                value: username,
+                value: normalize(username),
             },
         ],
         status: "to do",
     };
-    // Send task
     const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -133,4 +130,16 @@ async function createTasks(payload, username) {
     });
     const data = await res.json();
     console.log("Task created with custom fields:", data);
+}
+// Clean timestamp using Luxon
+export function getJhbTimestamp() {
+    return DateTime.now()
+        .setZone("Africa/Johannesburg")
+        .toFormat("yyyy-MM-dd HH:mm:ss"); // 2025-10-06 15:20:30
+}
+// Normalize strings: trim, remove extra quotes
+function normalize(str) {
+    if (typeof str !== "string")
+        return String(str);
+    return str.trim().replace(/^"+|"+$/g, "");
 }
