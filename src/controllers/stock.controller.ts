@@ -26,26 +26,25 @@ export const stockControllerRouter = async (req: Request, res: Response) => {
   }
 };
 
-
-
 function parseClickUpPayload(clickupPayload: any) {
   const { payload } = clickupPayload;
 
   const description = payload.text_content;
-  const lines = description.split("\n").filter(Boolean);
+  const lines = description.split('\n').filter(Boolean);
 
   const result: Record<string, any> = {};
-  let username = "Unknown";
+  let username = 'Unknown';
 
   // Detect Withdrawal field dynamically
-  const withdrawalField = payload.fields.find((f: any) =>
-    typeof f.value === "string" && f.value.toLowerCase().includes("withdrawal")
+  const withdrawalField = payload.fields.find(
+    (f: any) => typeof f.value === 'string' && f.value.toLowerCase().includes('withdrawal')
   );
 
   // Detect user field dynamically (assuming it’s an email or anything not "Intake"/"Withdrawal")
-  const userField = payload.fields.find((f: any) =>
-    typeof f.value === "string" &&
-    !["withdrawal", "intake"].includes(f.value.toLowerCase().trim())
+  const userField = payload.fields.find(
+    (f: any) =>
+      typeof f.value === 'string' &&
+      !['withdrawal', 'intake'].includes(f.value.toLowerCase().trim())
   );
 
   if (userField) username = userField.value;
@@ -54,8 +53,8 @@ function parseClickUpPayload(clickupPayload: any) {
     const line = lines[i].trim();
 
     // Detect "Category, Subcategory" line
-    if (line.includes(",")) {
-      const [categoryName, subCategoryName] = line.split(",").map((s: string) => s.trim());
+    if (line.includes(',')) {
+      const [categoryName, subCategoryName] = line.split(',').map((s: string) => s.trim());
 
       if (!result[categoryName]) result[categoryName] = {};
       if (!result[categoryName][subCategoryName]) {
@@ -65,8 +64,8 @@ function parseClickUpPayload(clickupPayload: any) {
         };
       }
 
-      const keyLine = lines[i + 1]?.replace("Key: ", "").trim();
-      const valueLine = lines[i + 2]?.replace("Value: ", "").trim();
+      const keyLine = lines[i + 1]?.replace('Key: ', '').trim();
+      const valueLine = lines[i + 2]?.replace('Value: ', '').trim();
 
       if (keyLine && valueLine) {
         result[categoryName][subCategoryName].subComponents[keyLine] = {

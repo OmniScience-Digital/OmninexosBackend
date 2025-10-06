@@ -66,7 +66,6 @@ export const clickUpRouter = async (req: Request, res: Response): Promise<void> 
 //       const datetime = getJhbTimestamp();
 //       const heading = hasWithdrawal ? "Withdrawal" : "Intake";
 
-
 //       const topic = `Stock Action, ${heading} @ ${datetime}`;
 
 //       const body = {
@@ -101,7 +100,6 @@ export const clickUpRouter = async (req: Request, res: Response): Promise<void> 
 //   }
 // }
 
-
 async function createTasks(payload: any, username: string) {
   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
   const result = payload.result;
@@ -126,41 +124,43 @@ async function createTasks(payload: any, username: string) {
           );
 
       // Add each subcategory to description
-      descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join("\n")}`);
+      descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join('\n')}`);
 
       if (subCategory.isWithdrawal) anyWithdrawal = true;
     }
   }
 
   // Add Withdrawal/Intake to topic
-  topic = anyWithdrawal ? `Stock Action, Withdrawal @ ${datetime}` : `Stock Action, Intake @ ${datetime}`;
+  topic = anyWithdrawal
+    ? `Stock Action, Withdrawal @ ${datetime}`
+    : `Stock Action, Intake @ ${datetime}`;
 
   const body = {
     name: topic,
-    description: descriptionLines.join("\n\n"),
+    description: descriptionLines.join('\n\n'),
     priority: 3,
     custom_fields: [
       {
         id: INTAKE_WITHDRAWAL_FIELD_ID,
-        value: anyWithdrawal ? "Withdrawal" : "Intake",
+        value: anyWithdrawal ? 'Withdrawal' : 'Intake',
       },
       {
         id: USERNAME_FIELD_ID,
         value: username,
       },
     ],
-    status: "to do",
+    status: 'to do',
   };
 
   // Send task
   const res = await fetch(url, {
-    method: "POST",
+    method: 'POST',
     headers: {
       Authorization: API_TOKEN,
-      "Content-Type": "application/json",
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  console.log("Task created with custom fields:", data);
+  console.log('Task created with custom fields:', data);
 }
