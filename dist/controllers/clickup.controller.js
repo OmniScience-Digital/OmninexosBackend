@@ -11,7 +11,7 @@ export const clickUpRouter = async (req, res) => {
     try {
         logger.info("Click Up POST router called");
         const payload = req.body;
-        const username = req.body.username || "Unknown User"; // get user from form
+        const username = req.body.username || "Unknown User";
         const status = { message: "ok", received: payload };
         // Loop through payload and create tasks
         await createTasks(payload, username);
@@ -28,63 +28,10 @@ export const clickUpRouter = async (req, res) => {
         });
     }
 };
-// async function createTasks(payload: any, username: string) {
-//   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
-//   const result = payload.result;
-//   let descriptionLines: string[] = [];
-//   let anyWithdrawal = false;
-//   const datetime = getJhbTimestamp();
-//   let topic = `Stock Action @ ${datetime}`;
-//   for (const categoryName of Object.keys(result)) {
-//     const category = result[categoryName];
-//     for (const subCategoryName of Object.keys(category)) {
-//       const subCategory = category[subCategoryName];
-//       const subComponents = subCategory.subComponents || {};
-//       const subLines = Array.isArray(subComponents)
-//         ? subComponents.map((sub: any) => `Key: ${sub.key}\nValue: ${sub.value}`)
-//         : Object.entries(subComponents).map(
-//             ([key, sub]: [string, any]) => `Key: ${key}\nValue: ${sub.value}`
-//           );
-//       // Add each subcategory to description
-//       descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join('\n')}`);
-//       if (subCategory.isWithdrawal) anyWithdrawal = true;
-//     }
-//   }
-//   // Add Withdrawal/Intake to topic
-//   topic = anyWithdrawal
-//     ? `Stock Action, Withdrawal @ ${datetime}`
-//     : `Stock Action, Intake @ ${datetime}`;
-//   const body = {
-//     name: topic,
-//     description: descriptionLines.join('\n\n'),
-//     priority: 3,
-//     custom_fields: [
-//       {
-//         id: INTAKE_WITHDRAWAL_FIELD_ID,
-//         value: anyWithdrawal ? 'Withdrawal' : 'Intake',
-//       },
-//       {
-//         id: USERNAME_FIELD_ID,
-//         value: username,
-//       },
-//     ],
-//     status: 'to do',
-//   };
-//   // Send task
-//   const res = await fetch(url, {
-//     method: 'POST',
-//     headers: {
-//       Authorization: API_TOKEN,
-//       'Content-Type': 'application/json',
-//     },
-//     body: JSON.stringify(body),
-//   });
-//   const data = await res.json();
-//   console.log('Task created with custom fields:', data);
-// }
 async function createTasks(payload, username) {
     const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
     const result = payload.result;
+    console.log(result);
     let descriptionLines = [];
     let anyWithdrawal = false;
     const datetime = getJhbTimestamp();
@@ -96,7 +43,7 @@ async function createTasks(payload, username) {
             const subLines = Array.isArray(subComponents)
                 ? subComponents.map((sub) => `Key: ${normalize(sub.key)}\nValue: ${normalize(sub.value)}`)
                 : Object.entries(subComponents).map(([key, sub]) => `Key: ${normalize(key)}\nValue: ${normalize(sub.value)}`);
-            descriptionLines.push(`${normalize(categoryName)}, ${normalize(subCategoryName)}\n${subLines.join("\n")}`);
+            descriptionLines.push(`${normalize(categoryName)}, ${normalize(subCategoryName)}\n${subLines.join("\n\n")}`);
             if (subCategory.isWithdrawal)
                 anyWithdrawal = true;
         }
@@ -133,9 +80,7 @@ async function createTasks(payload, username) {
 }
 // Clean timestamp using Luxon
 export function getJhbTimestamp() {
-    return DateTime.now()
-        .setZone("Africa/Johannesburg")
-        .toFormat("yyyy-MM-dd HH:mm:ss"); // 2025-10-06 15:20:30
+    return DateTime.now().setZone("Africa/Johannesburg").toFormat("yyyy-MM-dd HH:mm:ss"); // 2025-10-06 15:20:30
 }
 // Normalize strings: trim, remove extra quotes
 function normalize(str) {

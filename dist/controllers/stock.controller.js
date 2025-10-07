@@ -25,34 +25,38 @@ function parseClickUpPayload(clickupPayload) {
     const lines = description.split("\n").filter(Boolean);
     const result = {};
     let username = "Unknown";
-    // Detect Withdrawal field dynamically
+    let currentCategory = "";
+    let currentSubCategory = "";
     const withdrawalField = payload.fields.find((f) => typeof f.value === "string" && f.value.toLowerCase().includes("withdrawal"));
-    // Detect user field dynamically (assuming it’s an email or anything not "Intake"/"Withdrawal")
     const userField = payload.fields.find((f) => typeof f.value === "string" &&
         !["withdrawal", "intake"].includes(f.value.toLowerCase().trim()));
     if (userField)
         username = userField.value;
+    // Process all lines
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        // Detect "Category, Subcategory" line
-        if (line.includes(",")) {
+        const line = lines[i];
+        // Check if line contains a category (contains comma and doesn't start with "Key:" or "Value:")
+        if (line.includes(",") && !line.startsWith("Key:") && !line.startsWith("Value:")) {
             const [categoryName, subCategoryName] = line.split(",").map((s) => s.trim());
             if (!result[categoryName])
                 result[categoryName] = {};
-            if (!result[categoryName][subCategoryName]) {
-                result[categoryName][subCategoryName] = {
-                    isWithdrawal: withdrawalField ? true : false,
-                    subComponents: {},
-                };
-            }
-            const keyLine = lines[i + 1]?.replace("Key: ", "").trim();
-            const valueLine = lines[i + 2]?.replace("Value: ", "").trim();
-            if (keyLine && valueLine) {
-                result[categoryName][subCategoryName].subComponents[keyLine] = {
+            result[categoryName][subCategoryName] = {
+                isWithdrawal: withdrawalField ? true : false,
+                subComponents: {},
+            };
+            currentCategory = categoryName;
+            currentSubCategory = subCategoryName;
+        }
+        // Process Key/Value pairs
+        else if (line.startsWith("Key:") && i + 1 < lines.length && lines[i + 1].startsWith("Value:")) {
+            const keyLine = line.replace("Key: ", "").trim();
+            const valueLine = lines[i + 1].replace("Value: ", "").trim();
+            if (keyLine && valueLine && currentCategory && currentSubCategory) {
+                result[currentCategory][currentSubCategory].subComponents[keyLine] = {
                     value: Number(valueLine),
                 };
             }
-            i += 2; // Skip Key/Value lines
+            i++; // Skip the next line since we processed it
         }
     }
     return {

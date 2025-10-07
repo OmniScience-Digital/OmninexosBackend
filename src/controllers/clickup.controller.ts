@@ -16,7 +16,7 @@ export const clickUpRouter = async (req: Request, res: Response): Promise<void> 
     logger.info('Click Up POST router called');
 
     const payload = req.body;
-    const username = req.body.username || 'Unknown User'; // get user from form
+    const username = req.body.username || 'Unknown User';
 
     const status = { message: 'ok', received: payload };
 
@@ -36,75 +36,11 @@ export const clickUpRouter = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-// async function createTasks(payload: any, username: string) {
-//   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
-//   const result = payload.result;
-
-//   let descriptionLines: string[] = [];
-//   let anyWithdrawal = false;
-
-//   const datetime = getJhbTimestamp();
-//   let topic = `Stock Action @ ${datetime}`;
-
-//   for (const categoryName of Object.keys(result)) {
-//     const category = result[categoryName];
-
-//     for (const subCategoryName of Object.keys(category)) {
-//       const subCategory = category[subCategoryName];
-//       const subComponents = subCategory.subComponents || {};
-
-//       const subLines = Array.isArray(subComponents)
-//         ? subComponents.map((sub: any) => `Key: ${sub.key}\nValue: ${sub.value}`)
-//         : Object.entries(subComponents).map(
-//             ([key, sub]: [string, any]) => `Key: ${key}\nValue: ${sub.value}`
-//           );
-
-//       // Add each subcategory to description
-//       descriptionLines.push(`${categoryName}, ${subCategoryName}\n${subLines.join('\n')}`);
-
-//       if (subCategory.isWithdrawal) anyWithdrawal = true;
-//     }
-//   }
-
-//   // Add Withdrawal/Intake to topic
-//   topic = anyWithdrawal
-//     ? `Stock Action, Withdrawal @ ${datetime}`
-//     : `Stock Action, Intake @ ${datetime}`;
-
-//   const body = {
-//     name: topic,
-//     description: descriptionLines.join('\n\n'),
-//     priority: 3,
-//     custom_fields: [
-//       {
-//         id: INTAKE_WITHDRAWAL_FIELD_ID,
-//         value: anyWithdrawal ? 'Withdrawal' : 'Intake',
-//       },
-//       {
-//         id: USERNAME_FIELD_ID,
-//         value: username,
-//       },
-//     ],
-//     status: 'to do',
-//   };
-
-//   // Send task
-//   const res = await fetch(url, {
-//     method: 'POST',
-//     headers: {
-//       Authorization: API_TOKEN,
-//       'Content-Type': 'application/json',
-//     },
-//     body: JSON.stringify(body),
-//   });
-//   const data = await res.json();
-//   console.log('Task created with custom fields:', data);
-// }
-
 async function createTasks(payload: any, username: string) {
   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
   const result = payload.result;
 
+  console.log(result);
   let descriptionLines: string[] = [];
   let anyWithdrawal = false;
 
@@ -126,7 +62,7 @@ async function createTasks(payload: any, username: string) {
           );
 
       descriptionLines.push(
-        `${normalize(categoryName)}, ${normalize(subCategoryName)}\n${subLines.join('\n')}`
+        `${normalize(categoryName)}, ${normalize(subCategoryName)}\n${subLines.join('\n\n')}`
       );
 
       if (subCategory.isWithdrawal) anyWithdrawal = true;
