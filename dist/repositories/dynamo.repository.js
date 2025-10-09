@@ -192,7 +192,7 @@ export async function updateComponents(payload) {
                     const existing = compQuery.Items[0];
                     const currentStock = Number(existing.currentStock.N);
                     const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-                    const prevHistory = existing.history?.S || "";
+                    const prevHistory = existing.history?.S || '';
                     const historyEntry = `${username}, componentId: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
                     const updatedHistory = prevHistory + historyEntry;
                     await dynamoClient.send(new UpdateItemCommand({
@@ -238,7 +238,7 @@ export async function updateComponents(payload) {
                         const existing = retry.Items[0];
                         const currentStock = Number(existing.currentStock.N);
                         const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-                        const prevHistory = existing.history?.S || "";
+                        const prevHistory = existing.history?.S || '';
                         const historyEntry = `${username}, componentId: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
                         const updatedHistory = prevHistory + historyEntry;
                         await dynamoClient.send(new UpdateItemCommand({

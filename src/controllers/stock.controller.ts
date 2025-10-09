@@ -11,7 +11,7 @@ export const stockControllerRouter = async (req: Request, res: Response) => {
 
     const payload = parseClickUpPayload(req.body);
 
-    await updateComponents(payload);
+     await updateComponents(payload);
 
     res.status(200).json({ success: true, message: 'Report Generated' });
   } catch (error: any) {
@@ -30,6 +30,8 @@ function parseClickUpPayload(clickupPayload: any) {
   const { payload } = clickupPayload;
   const description = payload.text_content;
   const lines = description.split('\n').filter(Boolean);
+
+  const timestamp = payload.name.match(/@ (.*)$/)?.[1] || null;
 
   const result: Record<string, any> = {};
   let username = 'Unknown';
@@ -83,5 +85,6 @@ function parseClickUpPayload(clickupPayload: any) {
   return {
     ...result,
     username,
+    timestamp
   };
 }

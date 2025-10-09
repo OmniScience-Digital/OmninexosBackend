@@ -28,8 +28,10 @@ function normalizeKey(key: string): string {
 }
 
 export async function updateComponents(payload: any) {
-  const { username, ...categories } = payload;
+  const { username, timestamp, ...categories } = payload;
   const now = new Date().toISOString();
+
+
 
   for (const rawCategoryName of Object.keys(categories)) {
     const categoryName = normalizeKey(rawCategoryName); // normalize category
@@ -151,82 +153,14 @@ export async function updateComponents(payload: any) {
           })
         );
 
-        // if (compQuery.Items && compQuery.Items.length > 0) {
-        //   // Update existing
-        //   const existing = compQuery.Items[0];
-        //   const currentStock = Number(existing.currentStock.N);
-        //   const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-
-        //   await dynamoClient.send(
-        //     new UpdateItemCommand({
-        //       TableName: SUBCOMPONENTS_TABLE,
-        //       Key: { id: { S: existing.id.S! } },
-        //       UpdateExpression: 'SET currentStock = :val, updatedAt = :upd',
-        //       ExpressionAttributeValues: {
-        //         ':val': { N: newStock.toString() },
-        //         ':upd': { S: now },
-        //       },
-        //     })
-        //   );
-        // } else {
-        //   // Create new component safely
-        //   try {
-        //     await dynamoClient.send(
-        //       new PutItemCommand({
-        //         TableName: SUBCOMPONENTS_TABLE,
-        //         Item: {
-        //           id: {
-        //             S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-        //           },
-        //           subcategoryId: { S: subcategoryId },
-        //           componentId: { S: componentKey },
-        //           currentStock: { N: value.toString() },
-        //           createdAt: { S: now },
-        //           updatedAt: { S: now },
-        //         },
-        //         ConditionExpression:
-        //           'attribute_not_exists(componentId) AND attribute_not_exists(subcategoryId)',
-        //       })
-        //     );
-        //   } catch (err) {
-        //     // If duplicate was inserted concurrently, fallback to update
-        //     const retry = await dynamoClient.send(
-        //       new QueryCommand({
-        //         TableName: SUBCOMPONENTS_TABLE,
-        //         IndexName: 'componentsBySubcategoryIdAndComponentId',
-        //         KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
-        //         ExpressionAttributeValues: {
-        //           ':sid': { S: subcategoryId },
-        //           ':cid': { S: componentKey },
-        //         },
-        //       })
-        //     );
-
-        //     const existing = retry.Items![0];
-        //     const currentStock = Number(existing.currentStock.N);
-        //     const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-
-        //     await dynamoClient.send(
-        //       new UpdateItemCommand({
-        //         TableName: SUBCOMPONENTS_TABLE,
-        //         Key: { id: { S: existing.id.S! } },
-        //         UpdateExpression: 'SET currentStock = :val, updatedAt = :upd',
-        //         ExpressionAttributeValues: {
-        //           ':val': { N: newStock.toString() },
-        //           ':upd': { S: now },
-        //         },
-        //       })
-        //     );
-        //   }
-        // }
-
         if (compQuery.Items && compQuery.Items.length > 0) {
           // --- Update existing component ---
           const existing = compQuery.Items[0];
           const currentStock = Number(existing.currentStock.N);
           const newStock = isWithdrawal ? currentStock - value : currentStock + value;
           const prevHistory = existing.history?.S || '';
-          const historyEntry = `${username}, componentId: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
+          const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
+
           const updatedHistory = prevHistory + historyEntry;
 
           await dynamoClient.send(
@@ -243,7 +177,8 @@ export async function updateComponents(payload: any) {
           );
         } else {
           // --- Create new component ---
-          const newHistory = `${username}, componentId: ${componentKey}, before: 0, after: ${value}\n`;
+          const newHistory = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}\n`;
+
 
           try {
             await dynamoClient.send(
