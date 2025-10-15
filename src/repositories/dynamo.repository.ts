@@ -18,20 +18,22 @@ const dynamoClient = new DynamoDBClient({
   },
 });
 
-// 🔑 Normalizer (preserve letters, numbers, decimals, collapse spaces, lowercase)
+
 function normalizeKey(key: string): string {
   return key
     .trim()
-    .replace(/[^a-zA-Z0-9.]+/g, ' ') // keep letters, numbers, dots
-    .replace(/\s+/g, ' ') // collapse multiple spaces
-    .toLowerCase();
+    .toLowerCase()
+    // Keep letters, numbers, dots, and spaces - remove everything else
+    .replace(/[^a-zA-Z0-9.\s]/g, ' ')
+    // Collapse multiple spaces into single space
+    .replace(/\s+/g, ' ')
+    .trim();
 }
+
 
 export async function updateComponents(payload: any) {
   const { username, timestamp, ...categories } = payload;
   const now = new Date().toISOString();
-
-
 
   for (const rawCategoryName of Object.keys(categories)) {
     const categoryName = normalizeKey(rawCategoryName); // normalize category
@@ -179,7 +181,6 @@ export async function updateComponents(payload: any) {
           // --- Create new component ---
           const newHistory = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}\n`;
 
-
           try {
             await dynamoClient.send(
               new PutItemCommand({
@@ -198,7 +199,9 @@ export async function updateComponents(payload: any) {
               })
             );
           } catch (err) {
-            // --- Handle duplicate case safely ---
+            // Handle duplicate case safely ---
+            await new Promise(resolve => setTimeout(resolve, 50));
+            
             const retry = await dynamoClient.send(
               new QueryCommand({
                 TableName: SUBCOMPONENTS_TABLE,
@@ -211,11 +214,16 @@ export async function updateComponents(payload: any) {
               })
             );
 
-            const existing = retry.Items![0];
+            // Check if item exists before using it
+            if (!retry.Items || retry.Items.length === 0) {
+              throw new Error(`Component creation failed and item not found in retry: ${componentKey}`);
+            }
+
+            const existing = retry.Items[0];
             const currentStock = Number(existing.currentStock.N);
             const newStock = isWithdrawal ? currentStock - value : currentStock + value;
             const prevHistory = existing.history?.S || '';
-            const historyEntry = `${username}, componentId: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
+            const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
             const updatedHistory = prevHistory + historyEntry;
 
             await dynamoClient.send(
@@ -236,3 +244,5 @@ export async function updateComponents(payload: any) {
     }
   }
 }
+
+
