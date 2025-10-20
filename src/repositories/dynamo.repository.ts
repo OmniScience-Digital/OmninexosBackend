@@ -18,18 +18,18 @@ const dynamoClient = new DynamoDBClient({
   },
 });
 
-
 function normalizeKey(key: string): string {
-  return key
-    .trim()
-    .toLowerCase()
-    // Keep letters, numbers, dots, and spaces - remove everything else
-    .replace(/[^a-zA-Z0-9.\s]/g, ' ')
-    // Collapse multiple spaces into single space
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    key
+      .trim()
+      .toLowerCase()
+      // Keep letters, numbers, dots, and spaces - remove everything else
+      .replace(/[^a-zA-Z0-9.\s]/g, ' ')
+      // Collapse multiple spaces into single space
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
-
 
 export async function updateComponents(payload: any) {
   const { username, timestamp, ...categories } = payload;
@@ -200,8 +200,8 @@ export async function updateComponents(payload: any) {
             );
           } catch (err) {
             // Handle duplicate case safely ---
-            await new Promise(resolve => setTimeout(resolve, 50));
-            
+            await new Promise((resolve) => setTimeout(resolve, 50));
+
             const retry = await dynamoClient.send(
               new QueryCommand({
                 TableName: SUBCOMPONENTS_TABLE,
@@ -216,7 +216,9 @@ export async function updateComponents(payload: any) {
 
             // Check if item exists before using it
             if (!retry.Items || retry.Items.length === 0) {
-              throw new Error(`Component creation failed and item not found in retry: ${componentKey}`);
+              throw new Error(
+                `Component creation failed and item not found in retry: ${componentKey}`
+              );
             }
 
             const existing = retry.Items[0];
@@ -244,5 +246,3 @@ export async function updateComponents(payload: any) {
     }
   }
 }
-
-

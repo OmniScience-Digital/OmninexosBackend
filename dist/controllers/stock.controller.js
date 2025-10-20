@@ -23,6 +23,7 @@ function parseClickUpPayload(clickupPayload) {
     const { payload } = clickupPayload;
     const description = payload.text_content;
     const lines = description.split("\n").filter(Boolean);
+    const timestamp = payload.name.match(/@ (.*)$/)?.[1] || null;
     const result = {};
     let username = "Unknown";
     let currentCategory = "";
@@ -62,5 +63,6 @@ function parseClickUpPayload(clickupPayload) {
     return {
         ...result,
         username,
+        timestamp
     };
 }

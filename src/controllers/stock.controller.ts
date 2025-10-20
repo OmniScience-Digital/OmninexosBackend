@@ -11,7 +11,7 @@ export const stockControllerRouter = async (req: Request, res: Response) => {
 
     const payload = parseClickUpPayload(req.body);
 
-     await updateComponents(payload);
+    await updateComponents(payload);
 
     res.status(200).json({ success: true, message: 'Report Generated' });
   } catch (error: any) {
@@ -85,6 +85,6 @@ function parseClickUpPayload(clickupPayload: any) {
   return {
     ...result,
     username,
-    timestamp
+    timestamp,
   };
 }
