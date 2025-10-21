@@ -11,14 +11,14 @@ const dynamoClient = new DynamoDBClient({
     },
 });
 function normalizeKey(key) {
-    return key
+    return (key
         .trim()
         .toLowerCase()
         // Keep letters, numbers, dots, and spaces - remove everything else
         .replace(/[^a-zA-Z0-9.\s]/g, ' ')
         // Collapse multiple spaces into single space
         .replace(/\s+/g, ' ')
-        .trim();
+        .trim());
 }
 export async function updateComponents(payload) {
     const { username, timestamp, ...categories } = payload;
@@ -163,7 +163,7 @@ export async function updateComponents(payload) {
                     }
                     catch (err) {
                         // Handle duplicate case safely ---
-                        await new Promise(resolve => setTimeout(resolve, 50));
+                        await new Promise((resolve) => setTimeout(resolve, 50));
                         const retry = await dynamoClient.send(new QueryCommand({
                             TableName: SUBCOMPONENTS_TABLE,
                             IndexName: 'componentsBySubcategoryIdAndComponentId',

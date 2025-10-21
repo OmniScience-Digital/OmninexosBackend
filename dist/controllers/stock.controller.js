@@ -63,6 +63,6 @@ function parseClickUpPayload(clickupPayload) {
     return {
         ...result,
         username,
-        timestamp
+        timestamp,
     };
 }

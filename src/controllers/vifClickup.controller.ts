@@ -1,7 +1,5 @@
 import logger from '../utils/logger';
 import { Request, Response } from 'express';
-import fetch from 'node-fetch';
-import FormData from 'form-data';
 import { DateTime } from 'luxon';
 
 // ClickUp env variables
@@ -14,7 +12,7 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
     logger.info('Vif to ClickUp route triggered');
 
     const { vehicleId, vehicleReg, odometer, inspectionResults, username } = req.body;
-    const files = (req as any).files; // multer adds this
+    const files = (req as any).files;
 
     logger.info(
       `Vehicle ID: ${vehicleId}, Odometer: ${odometer},Vehicle Reg: ${vehicleReg}, Username: ${username}`
@@ -27,7 +25,7 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    // ✅ Format inspection questions nicely
+    // Format inspection questions nicely
     const questionLines =
       Array.isArray(inspectionResults) && inspectionResults.length > 0
         ? inspectionResults
@@ -73,20 +71,22 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
     const taskId = taskData.id;
     logger.info(`Created ClickUp task: ${taskId}`);
 
-    // Upload all photos to that task
+    // Upload all photos to that task using native FormData
     const uploadedResults: any[] = [];
 
     for (const file of files) {
       const formData = new FormData();
-      formData.append('attachment', file.buffer, {
-        filename: file.originalname,
-        contentType: file.mimetype,
-      });
+      formData.append(
+        'attachment',
+        new Blob([file.buffer], { type: file.mimetype }),
+        file.originalname
+      );
 
       const response = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
         method: 'POST',
         headers: {
           Authorization: API_TOKEN,
+          // Let fetch set the Content-Type with boundary automatically
         },
         body: formData,
       });
@@ -111,9 +111,9 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
 };
 
 export function getJhbTimestamp() {
-  return DateTime.now().setZone('Africa/Johannesburg').toFormat('yyyy-MM-dd HH:mm:ss'); // 2025-10-06 15:20:30
+  return DateTime.now().setZone('Africa/Johannesburg').toFormat('yyyy-MM-dd HH:mm:ss');
 }
-// Normalize strings: trim, remove extra quotes
+
 function normalize(str: any) {
   if (typeof str !== 'string') return String(str);
   return str.trim().replace(/^"+|"+$/g, '');
