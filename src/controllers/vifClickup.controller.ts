@@ -2,79 +2,85 @@ import logger from '../utils/logger';
 import { Request, Response } from 'express';
 import { DateTime } from 'luxon';
 
-// ClickUp env variables
 const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
 const LIST_ID = process.env.VIF_LIST_ID!;
 const USERNAME_FIELD_ID = 'daf6f996-8096-473b-b9e4-9e20f4568d63';
 
+let currentTaskId: string | null = null;
+
 export const vifClickUp = async (req: Request, res: Response): Promise<void> => {
   try {
-    logger.info('Vif to ClickUp route triggered');
-
-    const { vehicleId, vehicleReg, odometer, inspectionResults, username } = req.body;
     const files = (req as any).files;
+    const {
+      vehicleId,
+      vehicleReg,
+      odometer,
+      inspectionResults,
+      username,
+      photoIndex,
+      totalPhotos,
+    } = req.body;
 
-    logger.info(
-      `Vehicle ID: ${vehicleId}, Odometer: ${odometer},Vehicle Reg: ${vehicleReg}, Username: ${username}`
-    );
+    logger.info(`Processing photo ${parseInt(photoIndex) + 1} of ${totalPhotos}`);
 
-    logger.info(`Received ${files?.length || 0} photos`);
+    // Parse inspection results if it's a string
+    const inspectionData =
+      typeof inspectionResults === 'string' ? JSON.parse(inspectionResults) : inspectionResults;
 
-    if (!files || files.length === 0) {
-      res.status(400).json({ message: 'No photos uploaded' });
-      return;
-    }
+    // Create task on first photo only
+    if (!currentTaskId) {
+      logger.info(
+        `Creating new task for Vehicle ID: ${vehicleId}, Odometer: ${odometer}, Vehicle Reg: ${vehicleReg}, Username: ${username}`
+      );
 
-    // Format inspection questions nicely
-    const questionLines =
-      Array.isArray(inspectionResults) && inspectionResults.length > 0
-        ? inspectionResults
-            .map(
-              (item: any, index: number) =>
-                `${index + 1}. ${item.question}\nAnswer: ${item.answer === 'true' ? 'Yes' : ' No'}`
-            )
-            .join('\n\n')
-        : 'No inspection results provided.';
+      const questionLines =
+        Array.isArray(inspectionData) && inspectionData.length > 0
+          ? inspectionData
+              .map(
+                (item: any, index: number) =>
+                  `${index + 1}. ${item.question}\nAnswer: ${item.answer === 'true' ? 'Yes' : ' No'}`
+              )
+              .join('\n\n')
+          : 'No inspection results provided.';
 
-    // Create a new ClickUp task
-    const timestamp = getJhbTimestamp();
+      const timestamp = getJhbTimestamp();
 
-    const body = {
-      name: `Vehicle Inspection - ${vehicleReg} ${timestamp}`,
-      description: `Vehicle Reg: ${vehicleReg}\nVehicle ID: ${vehicleId}\nOdometer: ${odometer}\n\nInspection Results:\n\n${questionLines}`,
-      custom_fields: [
-        {
-          id: USERNAME_FIELD_ID,
-          value: normalize(username),
+      const body = {
+        name: `Vehicle Inspection - ${vehicleReg} ${timestamp}`,
+        description: `Vehicle Reg: ${vehicleReg}\nVehicle ID: ${vehicleId}\nOdometer: ${odometer}\n\nInspection Results:\n\n${questionLines}`,
+        custom_fields: [
+          {
+            id: USERNAME_FIELD_ID,
+            value: normalize(username),
+          },
+        ],
+        status: 'to do',
+      };
+
+      const createTask = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
+        method: 'POST',
+        headers: {
+          Authorization: API_TOKEN,
+          'Content-Type': 'application/json',
         },
-      ],
-      status: 'to do',
-    };
+        body: JSON.stringify(body),
+      });
 
-    const createTask = await fetch(`https://api.clickup.com/api/v2/list/${LIST_ID}/task`, {
-      method: 'POST',
-      headers: {
-        Authorization: API_TOKEN,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+      const taskData = await createTask.json();
 
-    const taskData = (await createTask.json()) as any;
+      if (!taskData.id) {
+        logger.error('Failed to create ClickUp task', taskData);
+        res.status(500).json({ success: false, error: 'Failed to create ClickUp task' });
+        return;
+      }
 
-    if (!taskData.id) {
-      logger.error('Failed to create ClickUp task', taskData);
-      res.status(500).json({ success: false, error: 'Failed to create ClickUp task' });
-      return;
+      currentTaskId = taskData.id;
+      logger.info(`Created ClickUp task: ${currentTaskId}`);
     }
 
-    const taskId = taskData.id;
-    logger.info(`Created ClickUp task: ${taskId}`);
-
-    // Upload all photos to that task using native FormData
-    const uploadedResults: any[] = [];
-
-    for (const file of files) {
+    // Upload current photo to the task
+    if (files && files.length > 0) {
+      const file = files[0];
       const formData = new FormData();
       formData.append(
         'attachment',
@@ -82,30 +88,41 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
         file.originalname
       );
 
-      const response = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
-        method: 'POST',
-        headers: {
-          Authorization: API_TOKEN,
-          // Let fetch set the Content-Type with boundary automatically
-        },
-        body: formData,
-      });
+      const response = await fetch(
+        `https://api.clickup.com/api/v2/task/${currentTaskId}/attachment`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: API_TOKEN,
+          },
+          body: formData,
+        }
+      );
 
-      const result = await response.json();
-      uploadedResults.push(result);
-
-      logger.info(`📎 Uploaded ${file.originalname} to ClickUp task ${taskId}`);
+      await response.json();
+      logger.info(`📎 Uploaded ${file.originalname} to ClickUp task ${currentTaskId}`);
     }
 
-    res.json({
-      success: true,
-      message: 'VIF task created and photos uploaded successfully',
-      taskId,
-      uploadedCount: uploadedResults.length,
-      results: uploadedResults,
-    });
+    // If this is the last photo, send final response and reset
+    if (parseInt(photoIndex) === parseInt(totalPhotos) - 1) {
+      res.json({
+        success: true,
+        message: 'VIF task created and all photos uploaded successfully',
+        taskId: currentTaskId,
+        uploadedCount: totalPhotos,
+      });
+      currentTaskId = null; // Reset for next submission
+    } else {
+      // Intermediate response for ongoing upload
+      res.json({
+        success: true,
+        message: `Photo ${parseInt(photoIndex) + 1} uploaded successfully`,
+        taskId: currentTaskId,
+      });
+    }
   } catch (error: any) {
     logger.error('Error uploading to ClickUp', error);
+    currentTaskId = null; // Reset on error
     res.status(500).json({ success: false, error: error.message });
   }
 };
