@@ -1,34 +1,32 @@
+import { insertInspectionService } from "../repositories/dynamo.inspection.js";
 import logger from "../utils/logger.js";
 export const vifControllerRouter = async (req, res) => {
     try {
-        logger.info("Executing Vif control route.");
-        console.log("Full request body:");
+        logger.info("Executing Inspection control route.");
         console.log(JSON.stringify(req.body, null, 2));
-        const payload = parseVifClickUpPayload(req.body);
-        res.status(200).json({ success: true, message: "Report Generated" });
+        const payload = parseInspectionClickUpPayload(req.body);
+        await insertInspectionService(payload);
+        res.status(200).json({ success: true, message: "Inspection inserted successfully" });
     }
     catch (error) {
-        logger.error("Failed to generate report:", error);
+        logger.error("Failed to insert inspection:", error);
         console.error(error);
         res.status(500).json({
             success: false,
-            error: "Error generating report",
+            error: "Error inserting inspection",
             details: error.message,
         });
     }
 };
-function parseVifClickUpPayload(clickupPayload) {
+function parseInspectionClickUpPayload(clickupPayload) {
     try {
         const { payload } = clickupPayload;
-        const description = payload.text_content;
-        const lines = description.split("\n").filter(Boolean);
-        // Process all lines
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            // console.log(line);
-        }
+        const text = payload.text_content;
+        logger.info("Received ClickUp payload for inspection.");
+        return { text };
     }
     catch (error) {
-        console.log(error);
+        logger.error("Error parsing inspection payload:", error);
+        throw error;
     }
 }
