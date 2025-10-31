@@ -1,18 +1,16 @@
+import { DateTime } from 'luxon';
+// Clean timestamp using Luxon
 export function getJhbTimestamp() {
-  const options = { timeZone: 'Africa/Johannesburg', hour12: false };
-  const jhbDate = new Intl.DateTimeFormat('en-GB', {
-    ...options,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(new Date());
+  return DateTime.now().setZone('Africa/Johannesburg').toFormat('yyyy-MM-dd HH:mm:ss'); // 2025-10-06 15:20:30
+}
 
-  const [datePart, timePart] = jhbDate.split(', ');
-  const [day, month, year] = datePart.split('/');
-  const jhbTimestamp = `${year}-${month}-${day} ${timePart}`;
+//  helper functions
+export function getJhbDate(): Date {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Johannesburg' }));
+}
 
-  return jhbTimestamp;
+export function parseDateInJhb(dateString: string | undefined): Date | null {
+  return dateString
+    ? new Date(new Date(dateString).toLocaleString('en-US', { timeZone: 'Africa/Johannesburg' }))
+    : null;
 }

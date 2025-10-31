@@ -1,17 +1,19 @@
-import { insertInspectionService } from '../repositories/dynamo.inspection';
+import { deleteTaskByClickupId } from '../repositories/dynamo.task';
 import logger from '../utils/logger';
 import { Request, Response } from 'express';
 
 export const vifControllerRouter = async (req: Request, res: Response) => {
   try {
     logger.info('Executing Inspection control route.');
+    // logger.info(JSON.stringify(req.body, null, 2));
 
-    console.log(JSON.stringify(req.body, null, 2));
+    const taskid = parseInspectionClickUpPayload(req.body);
+    console.log(taskid);
 
-    // const payload = parseInspectionClickUpPayload(req.body);
-    // await insertInspectionService(payload);
+     await deleteTaskByClickupId(taskid);
+     console.log('Task deleted successfully');
 
-    res.status(200).json({ success: true, message: 'Inspection inserted successfully' });
+    res.status(200).json({ success: true, message: 'Task updated successfully' });
   } catch (error: any) {
     logger.error('Failed to insert inspection:', error);
     console.error(error);
@@ -27,10 +29,9 @@ export const vifControllerRouter = async (req: Request, res: Response) => {
 function parseInspectionClickUpPayload(clickupPayload: any) {
   try {
     const { payload } = clickupPayload;
-    const text = payload.text_content;
-    const name =payload.name;
-    logger.info('Received ClickUp payload for inspection.');
-    return { text,name };
+    const taskid = payload.id;
+
+    return  taskid ;
   } catch (error: any) {
     logger.error('Error parsing inspection payload:', error);
     throw error;

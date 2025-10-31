@@ -119,7 +119,6 @@
 //   return str.trim().replace(/^"+|"+$/g, '');
 // }
 
-
 import logger from '../utils/logger';
 import { Request, Response } from 'express';
 import { DateTime } from 'luxon';
@@ -131,21 +130,31 @@ const USERNAME_FIELD_ID = 'daf6f996-8096-473b-b9e4-9e20f4568d63';
 
 export const vifClickUp = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { vehicleId, vehicleReg, odometer, inspectionResults, username, photoIndex, totalPhotos } = req.body;
+    const {
+      vehicleId,
+      vehicleReg,
+      odometer,
+      inspectionResults,
+      username,
+      photoIndex,
+      totalPhotos,
+    } = req.body;
     const files = (req as any).files;
 
     logger.info(`Processing photo ${parseInt(photoIndex) + 1} of ${totalPhotos}`);
 
     // Create session ID
     const sessionId = `${vehicleId}_${username}`;
-    
+
     // Check if task already exists in Redis
     let taskId = await redisService.getTaskSession(sessionId);
 
     // If no task exists, create one
     if (!taskId) {
       logger.info('Vif to ClickUp route triggered');
-      logger.info(`Vehicle ID: ${vehicleId}, Odometer: ${odometer}, Vehicle Reg: ${vehicleReg}, Username: ${username}`);
+      logger.info(
+        `Vehicle ID: ${vehicleId}, Odometer: ${odometer}, Vehicle Reg: ${vehicleReg}, Username: ${username}`
+      );
 
       // Format inspection questions nicely
       const questionLines =
@@ -184,19 +193,18 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
 
       const taskData = await createTask.json();
 
-
       if (!taskData.id) {
         logger.error('Failed to create ClickUp task', taskData);
         res.status(500).json({ success: false, error: 'Failed to create ClickUp task' });
         return;
-      }else{}
+      } else {
+      }
 
       taskId = taskData.id;
       logger.info(`Created ClickUp task: ${taskId}`);
 
       // Store task ID in Redis for future photos
       await redisService.setTaskSession(sessionId, taskId!);
-
     }
 
     // Upload current photo to the task
@@ -245,7 +253,7 @@ export const vifClickUp = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
-export function getJhbTimestamp() {
+function getJhbTimestamp() {
   return DateTime.now().setZone('Africa/Johannesburg').toFormat('yyyy-MM-dd HH:mm:ss');
 }
 

@@ -5,18 +5,11 @@ import {
   PutItemCommand,
   UpdateItemCommand,
 } from '@aws-sdk/client-dynamodb';
+import { dynamoClient } from '../services/dynamo.service';
 
 const CATEGORY_TABLE = process.env.CATEGORY_TABLE!;
 const SUBCATEGORY_TABLE = process.env.SUBCATEGORY_TABLE!;
 const SUBCOMPONENTS_TABLE = process.env.SUBCOMPONENTS_TABLE!;
-
-const dynamoClient = new DynamoDBClient({
-  region: process.env.AWS_REGION!,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
 
 function normalizeKey(key: string): string {
   return (

@@ -105,7 +105,7 @@ const LIST_ID = process.env.VIF_LIST_ID;
 const USERNAME_FIELD_ID = "daf6f996-8096-473b-b9e4-9e20f4568d63";
 export const vifClickUp = async (req, res) => {
     try {
-        const { vehicleId, vehicleReg, odometer, inspectionResults, username, photoIndex, totalPhotos } = req.body;
+        const { vehicleId, vehicleReg, odometer, inspectionResults, username, photoIndex, totalPhotos, } = req.body;
         const files = req.files;
         logger.info(`Processing photo ${parseInt(photoIndex) + 1} of ${totalPhotos}`);
         // Create session ID
@@ -149,7 +149,8 @@ export const vifClickUp = async (req, res) => {
                 res.status(500).json({ success: false, error: "Failed to create ClickUp task" });
                 return;
             }
-            else { }
+            else {
+            }
             taskId = taskData.id;
             logger.info(`Created ClickUp task: ${taskId}`);
             // Store task ID in Redis for future photos
@@ -195,7 +196,7 @@ export const vifClickUp = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
-export function getJhbTimestamp() {
+function getJhbTimestamp() {
     return DateTime.now().setZone("Africa/Johannesburg").toFormat("yyyy-MM-dd HH:mm:ss");
 }
 function normalize(str) {

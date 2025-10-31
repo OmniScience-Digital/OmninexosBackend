@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { DateTime } from 'luxon';
 import fetch from 'node-fetch';
 import logger from '../utils/logger';
+import { getJhbTimestamp } from '../helper/time/time.helper';
 
 // ClickUp env variables
 const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
@@ -101,11 +101,6 @@ async function createTasks(payload: any, username: string) {
 
   const data = await res.json();
   console.log('Task created with custom fields:', data);
-}
-
-// Clean timestamp using Luxon
-export function getJhbTimestamp() {
-  return DateTime.now().setZone('Africa/Johannesburg').toFormat('yyyy-MM-dd HH:mm:ss'); // 2025-10-06 15:20:30
 }
 
 // Normalize strings: trim, remove extra quotes

@@ -1,23 +1,17 @@
-import 'dotenv/config';
-import { DynamoDBClient, QueryCommand, PutItemCommand, UpdateItemCommand, } from '@aws-sdk/client-dynamodb';
+import "dotenv/config";
+import { QueryCommand, PutItemCommand, UpdateItemCommand, } from "@aws-sdk/client-dynamodb";
+import { dynamoClient } from "../services/dynamo.service.js";
 const CATEGORY_TABLE = process.env.CATEGORY_TABLE;
 const SUBCATEGORY_TABLE = process.env.SUBCATEGORY_TABLE;
 const SUBCOMPONENTS_TABLE = process.env.SUBCOMPONENTS_TABLE;
-const dynamoClient = new DynamoDBClient({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-});
 function normalizeKey(key) {
     return (key
         .trim()
         .toLowerCase()
         // Keep letters, numbers, dots, and spaces - remove everything else
-        .replace(/[^a-zA-Z0-9.\s]/g, ' ')
+        .replace(/[^a-zA-Z0-9.\s]/g, " ")
         // Collapse multiple spaces into single space
-        .replace(/\s+/g, ' ')
+        .replace(/\s+/g, " ")
         .trim());
 }
 export async function updateComponents(payload) {
@@ -30,10 +24,10 @@ export async function updateComponents(payload) {
         let categoryId;
         const catQuery = await dynamoClient.send(new QueryCommand({
             TableName: CATEGORY_TABLE,
-            IndexName: 'categoriesByCategoryName',
-            KeyConditionExpression: '#name = :nameVal',
-            ExpressionAttributeNames: { '#name': 'categoryName' },
-            ExpressionAttributeValues: { ':nameVal': { S: categoryName } },
+            IndexName: "categoriesByCategoryName",
+            KeyConditionExpression: "#name = :nameVal",
+            ExpressionAttributeNames: { "#name": "categoryName" },
+            ExpressionAttributeValues: { ":nameVal": { S: categoryName } },
         }));
         if (catQuery.Items && catQuery.Items.length > 0) {
             categoryId = catQuery.Items[0].id.S;
@@ -49,17 +43,17 @@ export async function updateComponents(payload) {
                         createdAt: { S: now },
                         updatedAt: { S: now },
                     },
-                    ConditionExpression: 'attribute_not_exists(categoryName)', // prevent duplicate
+                    ConditionExpression: "attribute_not_exists(categoryName)", // prevent duplicate
                 }));
             }
             catch (err) {
                 // Someone else inserted it concurrently, query again
                 const retry = await dynamoClient.send(new QueryCommand({
                     TableName: CATEGORY_TABLE,
-                    IndexName: 'categoriesByCategoryName',
-                    KeyConditionExpression: '#name = :nameVal',
-                    ExpressionAttributeNames: { '#name': 'categoryName' },
-                    ExpressionAttributeValues: { ':nameVal': { S: categoryName } },
+                    IndexName: "categoriesByCategoryName",
+                    KeyConditionExpression: "#name = :nameVal",
+                    ExpressionAttributeNames: { "#name": "categoryName" },
+                    ExpressionAttributeValues: { ":nameVal": { S: categoryName } },
                 }));
                 categoryId = retry.Items[0].id.S;
             }
@@ -72,11 +66,11 @@ export async function updateComponents(payload) {
             let subcategoryId;
             const subQuery = await dynamoClient.send(new QueryCommand({
                 TableName: SUBCATEGORY_TABLE,
-                IndexName: 'subCategoriesByCategoryIdAndSubcategoryName',
-                KeyConditionExpression: 'categoryId = :cid AND subcategoryName = :subName',
+                IndexName: "subCategoriesByCategoryIdAndSubcategoryName",
+                KeyConditionExpression: "categoryId = :cid AND subcategoryName = :subName",
                 ExpressionAttributeValues: {
-                    ':cid': { S: categoryId },
-                    ':subName': { S: subName },
+                    ":cid": { S: categoryId },
+                    ":subName": { S: subName },
                 },
             }));
             if (subQuery.Items && subQuery.Items.length > 0) {
@@ -94,18 +88,18 @@ export async function updateComponents(payload) {
                             createdAt: { S: now },
                             updatedAt: { S: now },
                         },
-                        ConditionExpression: 'attribute_not_exists(subcategoryName) AND attribute_not_exists(categoryId)',
+                        ConditionExpression: "attribute_not_exists(subcategoryName) AND attribute_not_exists(categoryId)",
                     }));
                 }
                 catch (err) {
                     // Someone else inserted it concurrently, query again
                     const retry = await dynamoClient.send(new QueryCommand({
                         TableName: SUBCATEGORY_TABLE,
-                        IndexName: 'subCategoriesByCategoryIdAndSubcategoryName',
-                        KeyConditionExpression: 'categoryId = :cid AND subcategoryName = :subName',
+                        IndexName: "subCategoriesByCategoryIdAndSubcategoryName",
+                        KeyConditionExpression: "categoryId = :cid AND subcategoryName = :subName",
                         ExpressionAttributeValues: {
-                            ':cid': { S: categoryId },
-                            ':subName': { S: subName },
+                            ":cid": { S: categoryId },
+                            ":subName": { S: subName },
                         },
                     }));
                     subcategoryId = retry.Items[0].id.S;
@@ -117,11 +111,11 @@ export async function updateComponents(payload) {
                 const { value } = subComponents[rawKey];
                 const compQuery = await dynamoClient.send(new QueryCommand({
                     TableName: SUBCOMPONENTS_TABLE,
-                    IndexName: 'componentsBySubcategoryIdAndComponentId',
-                    KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
+                    IndexName: "componentsBySubcategoryIdAndComponentId",
+                    KeyConditionExpression: "subcategoryId = :sid AND componentId = :cid",
                     ExpressionAttributeValues: {
-                        ':sid': { S: subcategoryId },
-                        ':cid': { S: componentKey },
+                        ":sid": { S: subcategoryId },
+                        ":cid": { S: componentKey },
                     },
                 }));
                 if (compQuery.Items && compQuery.Items.length > 0) {
@@ -129,17 +123,17 @@ export async function updateComponents(payload) {
                     const existing = compQuery.Items[0];
                     const currentStock = Number(existing.currentStock.N);
                     const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-                    const prevHistory = existing.history?.S || '';
-                    const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
+                    const prevHistory = existing.history?.S || "";
+                    const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? "withdrew" : "intake"}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
                     const updatedHistory = prevHistory + historyEntry;
                     await dynamoClient.send(new UpdateItemCommand({
                         TableName: SUBCOMPONENTS_TABLE,
                         Key: { id: { S: existing.id.S } },
-                        UpdateExpression: 'SET currentStock = :val, updatedAt = :upd, history = :hist',
+                        UpdateExpression: "SET currentStock = :val, updatedAt = :upd, history = :hist",
                         ExpressionAttributeValues: {
-                            ':val': { N: newStock.toString() },
-                            ':upd': { S: now },
-                            ':hist': { S: updatedHistory },
+                            ":val": { N: newStock.toString() },
+                            ":upd": { S: now },
+                            ":hist": { S: updatedHistory },
                         },
                     }));
                 }
@@ -158,7 +152,7 @@ export async function updateComponents(payload) {
                                 createdAt: { S: now },
                                 updatedAt: { S: now },
                             },
-                            ConditionExpression: 'attribute_not_exists(componentId) AND attribute_not_exists(subcategoryId)',
+                            ConditionExpression: "attribute_not_exists(componentId) AND attribute_not_exists(subcategoryId)",
                         }));
                     }
                     catch (err) {
@@ -166,11 +160,11 @@ export async function updateComponents(payload) {
                         await new Promise((resolve) => setTimeout(resolve, 50));
                         const retry = await dynamoClient.send(new QueryCommand({
                             TableName: SUBCOMPONENTS_TABLE,
-                            IndexName: 'componentsBySubcategoryIdAndComponentId',
-                            KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
+                            IndexName: "componentsBySubcategoryIdAndComponentId",
+                            KeyConditionExpression: "subcategoryId = :sid AND componentId = :cid",
                             ExpressionAttributeValues: {
-                                ':sid': { S: subcategoryId },
-                                ':cid': { S: componentKey },
+                                ":sid": { S: subcategoryId },
+                                ":cid": { S: componentKey },
                             },
                         }));
                         // Check if item exists before using it
@@ -180,17 +174,17 @@ export async function updateComponents(payload) {
                         const existing = retry.Items[0];
                         const currentStock = Number(existing.currentStock.N);
                         const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-                        const prevHistory = existing.history?.S || '';
-                        const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
+                        const prevHistory = existing.history?.S || "";
+                        const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? "withdrew" : "intake"}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
                         const updatedHistory = prevHistory + historyEntry;
                         await dynamoClient.send(new UpdateItemCommand({
                             TableName: SUBCOMPONENTS_TABLE,
                             Key: { id: { S: existing.id.S } },
-                            UpdateExpression: 'SET currentStock = :val, updatedAt = :upd, history = :hist',
+                            UpdateExpression: "SET currentStock = :val, updatedAt = :upd, history = :hist",
                             ExpressionAttributeValues: {
-                                ':val': { N: newStock.toString() },
-                                ':upd': { S: now },
-                                ':hist': { S: updatedHistory },
+                                ":val": { N: newStock.toString() },
+                                ":upd": { S: now },
+                                ":hist": { S: updatedHistory },
                             },
                         }));
                     }
