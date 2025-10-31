@@ -40,7 +40,7 @@ const fleetHelper = async (items: DynamoDbFleetItem[], tasks: DynamoDbTaskItem[]
       const existingTasks = tasks.filter((task) => task.vehicleReg.S === vehicle.vehicleReg.S);
 
       // Create tasks only if they don't exist
-      if (isBreakAndLuxExpired || 1) {
+      if (isBreakAndLuxExpired) {
         const breakAndLuxTaskExists = existingTasks.some((task) => task.taskType.S === 'breaknlux');
 
         if (!breakAndLuxTaskExists) {
@@ -66,7 +66,7 @@ const fleetHelper = async (items: DynamoDbFleetItem[], tasks: DynamoDbTaskItem[]
         }
       }
 
-      if (isLicenseDiscExpired || 1) {
+      if (isLicenseDiscExpired) {
         const licenseDiscTaskExists = existingTasks.some(
           (task) => task.taskType.S === 'licensedisc'
         );
@@ -94,7 +94,7 @@ const fleetHelper = async (items: DynamoDbFleetItem[], tasks: DynamoDbTaskItem[]
         }
       }
 
-      if (isServiceExpired || 1) {
+      if (isServiceExpired) {
         const serviceTaskExists = existingTasks.some((task) => task.taskType.S === 'service');
 
         if (!serviceTaskExists) {

@@ -28,7 +28,7 @@ const fleetHelper = async (items, tasks) => {
             // Check if tasks already exist for this vehicle
             const existingTasks = tasks.filter((task) => task.vehicleReg.S === vehicle.vehicleReg.S);
             // Create tasks only if they don't exist
-            if (isBreakAndLuxExpired || 1) {
+            if (isBreakAndLuxExpired) {
                 const breakAndLuxTaskExists = existingTasks.some((task) => task.taskType.S === "breaknlux");
                 if (!breakAndLuxTaskExists) {
                     const topic = `${vehicle.fleetNumber?.S}, Break and Lux Renewal, ${timestamp}`;
@@ -48,7 +48,7 @@ const fleetHelper = async (items, tasks) => {
                     logger.info(`Created breaknlux task for ${vehicle.vehicleReg?.S}`);
                 }
             }
-            if (isLicenseDiscExpired || 1) {
+            if (isLicenseDiscExpired) {
                 const licenseDiscTaskExists = existingTasks.some((task) => task.taskType.S === "licensedisc");
                 if (!licenseDiscTaskExists) {
                     const topic = `${vehicle.fleetNumber?.S}, Liscence Disc Expirey, ${timestamp}`;
@@ -68,7 +68,7 @@ const fleetHelper = async (items, tasks) => {
                     logger.info(`Created licensedisc task for ${vehicle.vehicleReg?.S}`);
                 }
             }
-            if (isServiceExpired || 1) {
+            if (isServiceExpired) {
                 const serviceTaskExists = existingTasks.some((task) => task.taskType.S === "service");
                 if (!serviceTaskExists) {
                     const topic = `${vehicle.fleetNumber?.S}, Service Due, ${timestamp}`;
