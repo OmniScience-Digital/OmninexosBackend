@@ -29,12 +29,14 @@ const fleetHelper = async (items: DynamoDbFleetItem[], tasks: DynamoDbTaskItem[]
       const lastService = parseDateInJhb(vehicle.lastServicedate?.S);
 
       // Comparison Logic
-      const isBreakAndLuxExpired =
-        breakAndLux && jhbCurrentDate > new Date(breakAndLux.getTime() + 60 * 24 * 60 * 60 * 1000);
-      const isLicenseDiscExpired =
-        licenseDisc && jhbCurrentDate > new Date(licenseDisc.getTime() + 334 * 24 * 60 * 60 * 1000);
       const isServiceExpired =
         lastService && jhbCurrentDate > new Date(lastService.getTime() + 334 * 24 * 60 * 60 * 1000);
+
+      const isLicenseDiscExpired =
+        licenseDisc && jhbCurrentDate > new Date(licenseDisc.getTime() - 31 * 24 * 60 * 60 * 1000);
+
+      const isBreakAndLuxExpired =
+        breakAndLux && jhbCurrentDate > new Date(breakAndLux.getTime() - 31 * 24 * 60 * 60 * 1000);
 
       // Check if tasks already exist for this vehicle
       const existingTasks = tasks.filter((task) => task.vehicleReg.S === vehicle.vehicleReg.S);

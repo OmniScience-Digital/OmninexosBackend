@@ -5,13 +5,12 @@ import { Request, Response } from 'express';
 export const vifControllerRouter = async (req: Request, res: Response) => {
   try {
     logger.info('Executing Inspection control route.');
-     logger.info(JSON.stringify(req.body, null, 2));
+    logger.info(JSON.stringify(req.body, null, 2));
 
     const taskid = parseInspectionClickUpPayload(req.body);
-    
 
-     await deleteTaskByClickupId(taskid);
-     console.log('Task deleted successfully');
+    await deleteTaskByClickupId(taskid);
+    console.log('Task deleted successfully');
 
     res.status(200).json({ success: true, message: 'Task updated successfully' });
   } catch (error: any) {
@@ -31,7 +30,7 @@ function parseInspectionClickUpPayload(clickupPayload: any) {
     const { payload } = clickupPayload;
     const taskid = payload.id;
 
-    return  taskid ;
+    return taskid;
   } catch (error: any) {
     logger.error('Error parsing inspection payload:', error);
     throw error;

@@ -66,7 +66,6 @@ export async function insertTaskService({
   logger.info(`Task created for vehicle ${vehicleReg} (taskType: ${taskType})`);
 }
 
-
 export async function deleteTaskByClickupId(clickupTaskId: string) {
   try {
     const queryCommand = new QueryCommand({
