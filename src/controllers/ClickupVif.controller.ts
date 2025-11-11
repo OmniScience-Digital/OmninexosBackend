@@ -1,4 +1,4 @@
-import { deleteTaskByClickupId } from '../repositories/dynamo.task';
+import { deleteTaskByClickupId } from '../repositories/dynamo.task.repository';
 import logger from '../utils/logger';
 import { Request, Response } from 'express';
 

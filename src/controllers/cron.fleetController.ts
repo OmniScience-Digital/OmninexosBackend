@@ -1,5 +1,5 @@
 import { getJhbDate, getJhbTimestamp, parseDateInJhb } from '../helper/time/time.helper';
-import { insertTaskService } from '../repositories/dynamo.task';
+import { insertTaskService } from '../repositories/dynamo.task.repository';
 import { DynamoDbFleetItem } from '../schema/fleet.schema';
 import { DynamoDbTaskItem } from '../schema/task.schema';
 import logger from '../utils/logger';

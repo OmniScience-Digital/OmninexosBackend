@@ -1,5 +1,5 @@
 import { getJhbDate, getJhbTimestamp, parseDateInJhb } from "../helper/time/time.helper.js";
-import { insertTaskService } from "../repositories/dynamo.task.js";
+import { insertTaskService } from "../repositories/dynamo.task.repository.js";
 import logger from "../utils/logger.js";
 const API_TOKEN = process.env.CLICKUP_API_TOKEN;
 const LIST_ID = process.env.VIF_LIST_ID;

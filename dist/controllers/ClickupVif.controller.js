@@ -1,4 +1,4 @@
-import { deleteTaskByClickupId } from "../repositories/dynamo.task.js";
+import { deleteTaskByClickupId } from "../repositories/dynamo.task.repository.js";
 import logger from "../utils/logger.js";
 export const vifControllerRouter = async (req, res) => {
     try {

@@ -11,3 +11,15 @@ export const dynamoDBTaskSchema = object({
     clickupTaskId: ddbStringSchema,
     taskType: ddbStringSchema,
 });
+export const dynamoDBEmployeeTaskSchema = object({
+    __typename: ddbStringSchema,
+    id: ddbStringSchema,
+    createdAt: ddbStringSchema,
+    updatedAt: ddbStringSchema,
+    employeeId: ddbStringSchema,
+    employeeName: ddbStringSchema.optional(),
+    taskType: ddbStringSchema.optional(),
+    documentType: ddbStringSchema.optional(),
+    documentIdentifier: ddbStringSchema.optional(),
+    clickupTaskId: ddbStringSchema.optional(),
+});

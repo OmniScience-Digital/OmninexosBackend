@@ -15,4 +15,18 @@ export const dynamoDBTaskSchema = object({
   taskType: ddbStringSchema,
 });
 
+export const dynamoDBEmployeeTaskSchema = object({
+  __typename: ddbStringSchema,
+  id: ddbStringSchema,
+  createdAt: ddbStringSchema,
+  updatedAt: ddbStringSchema,
+  employeeId: ddbStringSchema,
+  employeeName: ddbStringSchema.optional(),
+  taskType: ddbStringSchema.optional(),
+  documentType: ddbStringSchema.optional(),
+  documentIdentifier: ddbStringSchema.optional(),
+  clickupTaskId: ddbStringSchema.optional(),
+});
+
 export type DynamoDbTaskItem = TypeOf<typeof dynamoDBTaskSchema>;
+export type DynamoDbEmployeeTaskItem = TypeOf<typeof dynamoDBEmployeeTaskSchema>;

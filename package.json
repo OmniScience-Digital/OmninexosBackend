@@ -10,7 +10,7 @@
       "dev:build": "tsc && npx ts-add-js-extension --dir dist && npx prettier --write src/",
       "build": "tsc --noEmitOnError --skipLibCheck && npx ts-add-js-extension --dir dist",
       "start": "node dist/server.js",
-      "dev": "nodemon --watch 'src/**/*.ts' --exec 'tsx' src/server.ts",
+      "dev": "nodemon --watch src --ext ts,json --exec tsx src/server.ts",
       "lint": "eslint 'src/**/*.ts'"
    },
    "dependencies": {
