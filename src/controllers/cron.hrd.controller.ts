@@ -1,5 +1,4 @@
 import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getJhbDate, getJhbTimestamp, parseDateInJhb } from '../helper/time/time.helper';
 import { insertEmployeeTaskService } from '../repositories/dynamo.employee.repository';
 import { DynamoDbEmployeeItem } from '../schema/hrd.schema';
@@ -346,6 +345,52 @@ async function checkDateCondition(
   return false;
 }
 
+// async function createTask(
+//   documentType: string,
+//   expiryDate: Date,
+//   attachmentKey: string | undefined,
+//   timestamp: string,
+//   employeeId: string,
+//   employeeNumber: string | undefined,
+//   firstName: string | undefined,
+//   surname: string | undefined
+// ): Promise<void> {
+//   try {
+//     const taskName = `${documentType?.toUpperCase()}, Certificate Expiry, ${timestamp}`;
+//     const description = `Employee- ${(firstName?.toUpperCase() || '') + ' ' + (surname?.toUpperCase() || '')}\nEmployee ID- ${employeeId}\n${documentType} will require renewal\nCurrent Expiration Date- ${expiryDate.toISOString().split('T')[0]}`;
+
+//     // Create ClickUp task with due date = expiry date
+//     const clickUpTask = await createHrdTasks(
+//       taskName,
+//       description,
+//       employeeNumber || 'N/A',
+//       expiryDate,
+//       attachmentKey
+//     );
+
+//     if (!clickUpTask || !clickUpTask.id) {
+//       logger.error(`Failed to create ClickUp task for ${employeeId} - ${documentType}`);
+//       return;
+//     }
+
+//     await insertEmployeeTaskService({
+//       employeeId: employeeId,
+//       employeeName: `${firstName} ${surname}`,
+//       taskType: documentType,
+//       documentType: documentType,
+//       documentIdentifier: `${employeeId}_${documentType}`,
+//       clickupTaskId: clickUpTask.id,
+//     });
+
+//     logger.info(`Created ${documentType} task for employee ${employeeId}`);
+//   } catch (error) {
+//     logger.error(`Error creating task for ${employeeId} - ${documentType}:`, error);
+//     throw error;
+//   }
+// }
+
+// Check if file exists and is accessible before generating signed URL
+
 async function createTask(
   documentType: string,
   expiryDate: Date,
@@ -357,6 +402,8 @@ async function createTask(
   surname: string | undefined
 ): Promise<void> {
   try {
+    console.log(`🟡 START createTask for ${employeeId} - ${documentType}`);
+
     const taskName = `${documentType?.toUpperCase()}, Certificate Expiry, ${timestamp}`;
     const description = `Employee- ${(firstName?.toUpperCase() || '') + ' ' + (surname?.toUpperCase() || '')}\nEmployee ID- ${employeeId}\n${documentType} will require renewal\nCurrent Expiration Date- ${expiryDate.toISOString().split('T')[0]}`;
 
@@ -369,10 +416,14 @@ async function createTask(
       attachmentKey
     );
 
+    console.log(`🟢 ClickUp task created: ${clickUpTask?.id} for ${employeeId} - ${documentType}`);
+
     if (!clickUpTask || !clickUpTask.id) {
       logger.error(`Failed to create ClickUp task for ${employeeId} - ${documentType}`);
       return;
     }
+
+    console.log(`🟡 Attempting DB insertion for ${employeeId} - ${documentType}`);
 
     await insertEmployeeTaskService({
       employeeId: employeeId,
@@ -383,14 +434,16 @@ async function createTask(
       clickupTaskId: clickUpTask.id,
     });
 
+    console.log(`🟢 DB insertion successful for ${employeeId} - ${documentType}`);
+
     logger.info(`Created ${documentType} task for employee ${employeeId}`);
   } catch (error) {
+    console.log(`🔴 ERROR in createTask for ${employeeId} - ${documentType}:`, error);
     logger.error(`Error creating task for ${employeeId} - ${documentType}:`, error);
     throw error;
   }
 }
 
-// Check if file exists and is accessible before generating signed URL
 async function checkS3FileAccess(key: string): Promise<boolean> {
   try {
     const command = new HeadObjectCommand({
@@ -406,34 +459,7 @@ async function checkS3FileAccess(key: string): Promise<boolean> {
   }
 }
 
-// Get signed URL from S3 with better error handling
-async function getAttachmentUrl(key: string): Promise<string | null> {
-  try {
-    // First check if the file exists and is accessible
-    const isAccessible = await checkS3FileAccess(key);
-    if (!isAccessible) {
-      logger.warn(`S3 file not accessible, skipping signed URL generation: ${key}`);
-      return null;
-    }
-
-    const command = new GetObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: key,
-    });
-
-    const signedUrl = await getSignedUrl(s3Client, command, {
-      expiresIn: 3600, // 1 hour
-    });
-
-    logger.info(`Generated signed URL for: ${key}`);
-    return signedUrl;
-  } catch (error: any) {
-    logger.error(`Failed to get signed URL for key ${key}:`, error.message);
-    return null;
-  }
-}
-
-// ClickUp task creation with robust attachment handling
+// ClickUp task creation with file attachment upload and file existence check
 async function createHrdTasks(
   taskName: string,
   description: string,
@@ -442,31 +468,23 @@ async function createHrdTasks(
   attachmentKey?: string
 ): Promise<ClickUpTaskResponse> {
   try {
-    let attachmentInfo = '';
+    let finalDescription = description;
 
-    // Handle attachment if provided
+    // Check if file exists before creating the task
     if (attachmentKey) {
-      logger.info(`Processing attachment for task: ${attachmentKey}`);
-
-      // Try to get signed URL
-      const signedUrl = await getAttachmentUrl(attachmentKey);
-
-      if (signedUrl) {
-        // Add the signed URL to description
-        const filename = attachmentKey.split('/').pop() || 'document';
-        attachmentInfo = `\n\n Document Attachment: ${signedUrl}`;
-        logger.info(`Added signed URL to task description: ${filename}`);
-      } else {
-        // If we can't get a signed URL, at least show the key for debugging
-        attachmentInfo = `\n\n📎 Document Reference: ${attachmentKey} (Access issues - check S3 permissions)`;
-        logger.warn(`Could not generate signed URL for: ${attachmentKey}`);
+      const fileExists = await checkS3FileAccess(attachmentKey);
+      if (!fileExists) {
+        finalDescription = `${description}\n\n⚠️ Document Attachment: File does not exist at ${attachmentKey}`;
+        logger.warn(`File does not exist, adding note to description: ${attachmentKey}`);
+        attachmentKey = undefined;
       }
     }
 
+    // Create the task
     const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
     const body: any = {
       name: taskName,
-      description: description + attachmentInfo,
+      description: finalDescription,
       due_date: dueDate.getTime(),
       status: 'to do',
     };
@@ -488,6 +506,11 @@ async function createHrdTasks(
     const data = await res.json();
     logger.info(`Successfully created ClickUp task: ${data.id}`);
 
+    // If there's an attachment and file exists, upload the actual file to ClickUp
+    if (attachmentKey) {
+      await uploadFileToClickUp(data.id, attachmentKey);
+    }
+
     return data;
   } catch (error) {
     logger.error('Error creating ClickUp task:', error);
@@ -495,8 +518,55 @@ async function createHrdTasks(
   }
 }
 
-// Normalize strings
-function normalize(str: any): string {
-  if (typeof str !== 'string') return String(str);
-  return str.trim().replace(/^"+|"+$/g, '');
+// Upload actual file to ClickUp as attachment
+async function uploadFileToClickUp(taskId: string, attachmentKey: string): Promise<void> {
+  try {
+    logger.info(`Uploading file to ClickUp task ${taskId}: ${attachmentKey}`);
+
+    // Get the file from S3
+    const getObjectCommand = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: attachmentKey,
+    });
+
+    const s3Response = await s3Client.send(getObjectCommand);
+
+    // Convert the S3 stream to a buffer
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of s3Response.Body as any) {
+      chunks.push(chunk);
+    }
+    const fileBuffer = Buffer.concat(chunks);
+
+    // Get filename from the key
+    const filename = attachmentKey.split('/').pop() || 'document.pdf';
+
+    // Create FormData for ClickUp attachment upload
+    const formData = new FormData();
+    formData.append('attachment', new Blob([fileBuffer]), filename);
+
+    // Upload to ClickUp
+    const uploadResponse = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
+      method: 'POST',
+      headers: {
+        Authorization: API_TOKEN,
+      },
+      body: formData,
+    });
+
+    if (!uploadResponse.ok) {
+      const errorText = await uploadResponse.text();
+      throw new Error(`ClickUp attachment upload error: ${uploadResponse.status} - ${errorText}`);
+    }
+
+    const uploadData = await uploadResponse.json();
+    logger.info(`Successfully uploaded file to ClickUp: ${filename}`);
+  } catch (error: any) {
+    // Catch specific S3 errors and log appropriately
+    if (error.name === 'NoSuchKey') {
+      logger.warn(`File not found in S3, cannot upload to ClickUp: ${attachmentKey}`);
+    } else {
+      logger.error(`Error uploading file to ClickUp: ${error.message}`);
+    }
+  }
 }
