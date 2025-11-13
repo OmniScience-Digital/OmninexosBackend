@@ -5,8 +5,6 @@ import { Request, Response } from 'express';
 export const stockControllerRouter = async (req: Request, res: Response) => {
   try {
     logger.info('Executing stock control route.');
-
-    console.log('Full request body:');
     console.log(JSON.stringify(req.body, null, 2));
 
     const payload = parseClickUpPayload(req.body);

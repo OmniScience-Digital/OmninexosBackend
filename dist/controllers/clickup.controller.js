@@ -31,7 +31,6 @@ export const clickUpRouter = async (req, res) => {
 async function createTasks(payload, username) {
     const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
     const result = payload.result;
-    console.log(result);
     let descriptionLines = [];
     let anyWithdrawal = false;
     const datetime = getJhbTimestamp();
@@ -76,7 +75,6 @@ async function createTasks(payload, username) {
         body: JSON.stringify(body),
     });
     const data = await res.json();
-    console.log("Task created with custom fields:", data);
 }
 // Normalize strings: trim, remove extra quotes
 function normalize(str) {

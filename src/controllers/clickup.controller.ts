@@ -40,7 +40,6 @@ async function createTasks(payload: any, username: string) {
   const url = `https://api.clickup.com/api/v2/list/${LIST_ID}/task`;
   const result = payload.result;
 
-  console.log(result);
   let descriptionLines: string[] = [];
   let anyWithdrawal = false;
 
@@ -100,7 +99,6 @@ async function createTasks(payload: any, username: string) {
   });
 
   const data = await res.json();
-  console.log('Task created with custom fields:', data);
 }
 
 // Normalize strings: trim, remove extra quotes

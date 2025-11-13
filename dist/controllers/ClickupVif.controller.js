@@ -6,7 +6,6 @@ export const vifControllerRouter = async (req, res) => {
         logger.info(JSON.stringify(req.body, null, 2));
         const taskid = parseInspectionClickUpPayload(req.body);
         await deleteTaskByClickupId(taskid);
-        console.log("Task deleted successfully");
         res.status(200).json({ success: true, message: "Task updated successfully" });
     }
     catch (error) {

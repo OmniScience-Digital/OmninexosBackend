@@ -26,7 +26,7 @@ const timeZone = 'Africa/Johannesburg';
     // {
     // //call HrdController controller
     // await HrdController(employees,tasks);
-    // }
+    //}
   } catch (error: any) {
     logger.error('Runtime error:', error);
   }
