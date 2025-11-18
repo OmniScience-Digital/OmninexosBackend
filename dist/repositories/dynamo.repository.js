@@ -142,8 +142,10 @@ export async function updateComponents(payload) {
                             entityType: { S: "COMPONENT" },
                             entityId: { S: existing.id.S },
                             action: { S: "STOCK_UPDATE" },
-                            timestamp: { S: timestamp },
+                            timestamp: { S: now },
                             details: { S: historyEntry },
+                            createdAt: { S: now },
+                            updatedAt: { S: now },
                         },
                     }));
                 }
@@ -172,8 +174,10 @@ export async function updateComponents(payload) {
                                 entityType: { S: "COMPONENT" },
                                 entityId: { S: newComponentId },
                                 action: { S: "STOCK_UPDATE" },
-                                timestamp: { S: timestamp },
+                                timestamp: { S: now },
                                 details: { S: historyEntry },
+                                createdAt: { S: now },
+                                updatedAt: { S: now },
                             },
                         }));
                     }
@@ -214,8 +218,10 @@ export async function updateComponents(payload) {
                                 entityType: { S: "COMPONENT" },
                                 entityId: { S: existing.id.S },
                                 action: { S: "STOCK_UPDATE" },
-                                timestamp: { S: timestamp },
+                                timestamp: { S: now },
                                 details: { S: historyEntry },
+                                createdAt: { S: now },
+                                updatedAt: { S: now },
                             },
                         }));
                     }
