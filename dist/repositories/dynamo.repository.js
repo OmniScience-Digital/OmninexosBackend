@@ -134,7 +134,7 @@ export async function updateComponents(payload) {
                         },
                     }));
                     // --- Log history ---
-                    const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? "withdrew" : "intake"}: ${componentKey}, before: ${currentStock}, after: ${newStock}`;
+                    const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? "withdrew" : "intake"}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
                     await dynamoClient.send(new PutItemCommand({
                         TableName: HISTORY_TABLE,
                         Item: {
@@ -166,7 +166,7 @@ export async function updateComponents(payload) {
                             ConditionExpression: "attribute_not_exists(componentId) AND attribute_not_exists(subcategoryId)",
                         }));
                         // Log history
-                        const historyEntry = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}`;
+                        const historyEntry = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}\n`;
                         await dynamoClient.send(new PutItemCommand({
                             TableName: HISTORY_TABLE,
                             Item: {
@@ -210,7 +210,7 @@ export async function updateComponents(payload) {
                             },
                         }));
                         // Log history for the update
-                        const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? "withdrew" : "intake"}: ${componentKey}, before: ${currentStock}, after: ${newStock}`;
+                        const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? "withdrew" : "intake"}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
                         await dynamoClient.send(new PutItemCommand({
                             TableName: HISTORY_TABLE,
                             Item: {

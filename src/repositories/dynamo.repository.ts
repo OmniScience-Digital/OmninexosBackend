@@ -168,7 +168,7 @@ export async function updateComponents(payload: any) {
           );
 
           // --- Log history ---
-          const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}`;
+          const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
           await dynamoClient.send(
             new PutItemCommand({
               TableName: HISTORY_TABLE,
@@ -205,7 +205,7 @@ export async function updateComponents(payload: any) {
             );
 
             // Log history
-            const historyEntry = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}`;
+            const historyEntry = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}\n`;
             await dynamoClient.send(
               new PutItemCommand({
                 TableName: HISTORY_TABLE,
@@ -261,7 +261,7 @@ export async function updateComponents(payload: any) {
             );
 
             // Log history for the update
-            const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}`;
+            const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
             await dynamoClient.send(
               new PutItemCommand({
                 TableName: HISTORY_TABLE,
