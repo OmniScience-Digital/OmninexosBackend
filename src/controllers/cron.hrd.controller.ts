@@ -345,52 +345,6 @@ async function checkDateCondition(
   return false;
 }
 
-// async function createTask(
-//   documentType: string,
-//   expiryDate: Date,
-//   attachmentKey: string | undefined,
-//   timestamp: string,
-//   employeeId: string,
-//   employeeNumber: string | undefined,
-//   firstName: string | undefined,
-//   surname: string | undefined
-// ): Promise<void> {
-//   try {
-//     const taskName = `${documentType?.toUpperCase()}, Certificate Expiry, ${timestamp}`;
-//     const description = `Employee- ${(firstName?.toUpperCase() || '') + ' ' + (surname?.toUpperCase() || '')}\nEmployee ID- ${employeeId}\n${documentType} will require renewal\nCurrent Expiration Date- ${expiryDate.toISOString().split('T')[0]}`;
-
-//     // Create ClickUp task with due date = expiry date
-//     const clickUpTask = await createHrdTasks(
-//       taskName,
-//       description,
-//       employeeNumber || 'N/A',
-//       expiryDate,
-//       attachmentKey
-//     );
-
-//     if (!clickUpTask || !clickUpTask.id) {
-//       logger.error(`Failed to create ClickUp task for ${employeeId} - ${documentType}`);
-//       return;
-//     }
-
-//     await insertEmployeeTaskService({
-//       employeeId: employeeId,
-//       employeeName: `${firstName} ${surname}`,
-//       taskType: documentType,
-//       documentType: documentType,
-//       documentIdentifier: `${employeeId}_${documentType}`,
-//       clickupTaskId: clickUpTask.id,
-//     });
-
-//     logger.info(`Created ${documentType} task for employee ${employeeId}`);
-//   } catch (error) {
-//     logger.error(`Error creating task for ${employeeId} - ${documentType}:`, error);
-//     throw error;
-//   }
-// }
-
-// Check if file exists and is accessible before generating signed URL
-
 async function createTask(
   documentType: string,
   expiryDate: Date,
