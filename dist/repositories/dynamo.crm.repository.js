@@ -46,14 +46,14 @@ export async function updateComplianceRating({ complianceId, complianceRating, c
     const updateParams = {
         TableName: COMPLIANCE_TABLE,
         Key: {
-            id: { S: complianceId }
+            id: { S: complianceId },
         },
         UpdateExpression: "SET complianceRating = :rating, complianceRating30Days = :rating30, updatedAt = :updatedAt",
         ExpressionAttributeValues: {
             ":rating": { S: complianceRating.toString() },
             ":rating30": { S: complianceRating30Days.toString() },
-            ":updatedAt": { S: now }
-        }
+            ":updatedAt": { S: now },
+        },
     };
     try {
         await dynamoClient.send(new UpdateItemCommand(updateParams));

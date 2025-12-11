@@ -1,6 +1,17 @@
 import validateAndFilter from '../../middlewares/validateandfilter.middleware';
-import { getCompliance, getComplianceAdditionals, getCustomerSites } from '../../repositories/dynamo.crm.repository';
-import { DynamoDBComplianceAdditional, dynamoDBComplianceAdditionalSchema, DynamoDBComplianceRecord, dynamoDBComplianceRecordSchema, DynamoDBCustomerSite, dynamoDBCustomerSiteSchema } from '../../schema/crm.schema';
+import {
+  getCompliance,
+  getComplianceAdditionals,
+  getCustomerSites,
+} from '../../repositories/dynamo.crm.repository';
+import {
+  DynamoDBComplianceAdditional,
+  dynamoDBComplianceAdditionalSchema,
+  DynamoDBComplianceRecord,
+  dynamoDBComplianceRecordSchema,
+  DynamoDBCustomerSite,
+  dynamoDBCustomerSiteSchema,
+} from '../../schema/crm.schema';
 import logger from '../../utils/logger';
 
 export const fetchCompliance = async (): Promise<DynamoDBComplianceRecord[] | undefined> => {
@@ -33,14 +44,15 @@ export const fetchCompliance = async (): Promise<DynamoDBComplianceRecord[] | un
   }
 };
 
-export const fetchComplianceAdditionals = async (): Promise<DynamoDBComplianceAdditional[] | undefined> => {
+export const fetchComplianceAdditionals = async (): Promise<
+  DynamoDBComplianceAdditional[] | undefined
+> => {
   try {
-
     const compliancerecordsAdditionals = await getComplianceAdditionals();
 
-    const { validItems, invalidItems } = await validateAndFilter(dynamoDBComplianceAdditionalSchema)(
-      compliancerecordsAdditionals ?? []
-    );
+    const { validItems, invalidItems } = await validateAndFilter(
+      dynamoDBComplianceAdditionalSchema
+    )(compliancerecordsAdditionals ?? []);
 
     logger.info(`Customer DynamoDB Valid items: ${validItems.length}`);
     logger.warn(`Customer DynamoDB Invalid items: ${invalidItems.length}`);
@@ -63,7 +75,6 @@ export const fetchComplianceAdditionals = async (): Promise<DynamoDBComplianceAd
     return [];
   }
 };
-
 
 export const getAllCustomerSites = async (): Promise<DynamoDBCustomerSite[] | undefined> => {
   try {

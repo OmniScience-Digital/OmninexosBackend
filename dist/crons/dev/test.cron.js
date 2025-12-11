@@ -5,10 +5,10 @@ import { getFleetTasks, getHrdTasks } from "../../helper/task/task.helper.js";
 import { FleetController } from "../../controllers/cron.fleetController.js";
 import { getEmployees } from "../../helper/hrd/hrd.helper.js";
 import { HrdController } from "../../controllers/cron.hrd.controller.js";
-import { fetchCompliance, fetchComplianceAdditionals, getAllCustomerSites } from "../../helper/crm/crm.helper.js";
+import { fetchCompliance, fetchComplianceAdditionals, getAllCustomerSites, } from "../../helper/crm/crm.helper.js";
 import { CustomerRelations } from "../../controllers/cron.crm.controller.js";
 const timeZone = "Africa/Johannesburg";
-// Task 1:00 AM cron 
+// Task 1:00 AM cron
 cron.schedule("0 1 * * *", async () => {
     try {
         logger.info("[CRON] Triggered 01:00 AM Fleet Task Check");

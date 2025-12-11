@@ -1,6 +1,6 @@
 import validateAndFilter from "../../middlewares/validateandfilter.middleware.js";
-import { getCompliance, getComplianceAdditionals, getCustomerSites } from "../../repositories/dynamo.crm.repository.js";
-import { dynamoDBComplianceAdditionalSchema, dynamoDBComplianceRecordSchema, dynamoDBCustomerSiteSchema } from "../../schema/crm.schema.js";
+import { getCompliance, getComplianceAdditionals, getCustomerSites, } from "../../repositories/dynamo.crm.repository.js";
+import { dynamoDBComplianceAdditionalSchema, dynamoDBComplianceRecordSchema, dynamoDBCustomerSiteSchema, } from "../../schema/crm.schema.js";
 import logger from "../../utils/logger.js";
 export const fetchCompliance = async () => {
     try {

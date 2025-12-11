@@ -49,7 +49,7 @@ const ddbComplianceSchema = object({
   linkedEmployees: ddbListSchema,
   digitalContractorsPack: ddbListSchema,
   notes: ddbStringSchema.optional(),
-  
+
   // Requirement arrays - CHANGED from array(ddbStringSchema) to ddbListSchema
   clinicPlusRqd: ddbListSchema,
   clinicPlusInductionRqd: ddbListSchema,
@@ -127,8 +127,6 @@ export const dynamoDBComplianceAdditionalWithWrapperSchema = object({
   Item: ddbComplianceAdditionalsSchema,
 });
 
-
-
 const ddbNumberSchema = object({
   N: string().optional(),
 })
@@ -143,7 +141,7 @@ const ddbNumberSchema = object({
 const ddbCustomerSiteSchema = object({
   __typename: ddbStringSchema,
   id: ddbStringSchema,
-  
+
   // Site Information
   siteName: ddbStringSchema,
   siteLocation: ddbStringSchema.optional(),
@@ -195,9 +193,15 @@ export const dynamoDBCustomerSiteWithRelationsSchema = object({
 
 export type DynamoDBCustomerSite = TypeOf<typeof dynamoDBCustomerSiteSchema>;
 export type DynamoDBCustomerSiteItem = TypeOf<typeof dynamoDBCustomerSiteItemSchema>;
-export type DynamoDBCustomerSiteWithRelations = TypeOf<typeof dynamoDBCustomerSiteWithRelationsSchema>;
+export type DynamoDBCustomerSiteWithRelations = TypeOf<
+  typeof dynamoDBCustomerSiteWithRelationsSchema
+>;
 
 export type DynamoDBComplianceRecord = TypeOf<typeof dynamoDBComplianceRecordSchema>;
 export type DynamoDBComplianceAdditional = TypeOf<typeof dynamoDBComplianceAdditionalSchema>;
-export type DynamoDBComplianceItemWithWrapper = TypeOf<typeof dynamoDBComplianceItemWithWrapperSchema>;
-export type DynamoDBComplianceAdditionalWithWrapper = TypeOf<typeof dynamoDBComplianceAdditionalWithWrapperSchema>;
+export type DynamoDBComplianceItemWithWrapper = TypeOf<
+  typeof dynamoDBComplianceItemWithWrapperSchema
+>;
+export type DynamoDBComplianceAdditionalWithWrapper = TypeOf<
+  typeof dynamoDBComplianceAdditionalWithWrapperSchema
+>;
