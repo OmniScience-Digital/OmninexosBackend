@@ -5,12 +5,16 @@ import { getFleetTasks, getHrdTasks } from '../../helper/task/task.helper';
 import { FleetController } from '../../controllers/cron.fleetController';
 import { getEmployees } from '../../helper/hrd/hrd.helper';
 import { HrdController } from '../../controllers/cron.hrd.controller';
-import { fetchCompliance, fetchComplianceAdditionals, getAllCustomerSites } from '../../helper/crm/crm.helper';
+import {
+  fetchCompliance,
+  fetchComplianceAdditionals,
+  getAllCustomerSites,
+} from '../../helper/crm/crm.helper';
 import { CustomerRelations } from '../../controllers/cron.crm.controller';
 
 const timeZone = 'Africa/Johannesburg';
 
-// Task 1:00 AM cron 
+// Task 1:00 AM cron
 cron.schedule(
   '0 1 * * *',
   async () => {
@@ -61,7 +65,6 @@ cron.schedule(
       } else {
         logger.warn('Customer Relations: No valid data to process');
       }
-
     } catch (error: any) {
       logger.error('Runtime error:', error);
     }

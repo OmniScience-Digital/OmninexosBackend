@@ -5,12 +5,14 @@ import { getFleetTasks, getHrdTasks } from '../../helper/task/task.helper';
 import logger from '../../utils/logger';
 import { getEmployees } from '../../helper/hrd/hrd.helper';
 import { HrdController } from '../../controllers/cron.hrd.controller';
-import { fetchCompliance, fetchComplianceAdditionals,getAllCustomerSites } from '../../helper/crm/crm.helper';
+import {
+  fetchCompliance,
+  fetchComplianceAdditionals,
+  getAllCustomerSites,
+} from '../../helper/crm/crm.helper';
 import { CustomerRelations } from '../../controllers/cron.crm.controller';
 
 logger.info('Dev Cron Loaded');
-
-
 
 (async () => {
   try {
@@ -22,28 +24,21 @@ logger.info('Dev Cron Loaded');
     //   getHrdTasks(),
     //   getAllCustomerSites(),
     // ]);
-
     // if (compliance && additionals && employees&&hrdtasks) {
     //   //call fleet controller
     //   await CustomerRelations(employees, compliance, additionals,hrdtasks,customer||[]);
     // }
-
-
-
     // const tasks = await getFleetTasks();
     // if(fleets &&tasks)
     // {
     // //call fleet controller
     // await FleetController(fleets,tasks);
     // }
-
-   
     // if(employees&&tasks )
     // {
     // //call HrdController controller
     // await HrdController(employees,tasks);
     //}
-
     // const tasks = await getHrdTasks();
     // if(employees&&tasks )
     // {

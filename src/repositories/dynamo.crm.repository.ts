@@ -8,47 +8,46 @@ const COMPLIANCE_ADDITIONALS = process.env.COMPLIANCE_ADDITIONALS!;
 const CUSTOMER_TABLE = process.env.CUSTOMER_TABLE!;
 
 export const getCompliance = async () => {
-    try {
-        const params = {
-            TableName: COMPLIANCE_TABLE,
-        };
+  try {
+    const params = {
+      TableName: COMPLIANCE_TABLE,
+    };
 
-        const data = await dynamoClient.send(new ScanCommand(params));
+    const data = await dynamoClient.send(new ScanCommand(params));
 
-        return data.Items;
-    } catch (error: any) {
-        console.log('Error in getCustomerRelations', error);
-    }
+    return data.Items;
+  } catch (error: any) {
+    console.log('Error in getCustomerRelations', error);
+  }
 };
 
 export const getComplianceAdditionals = async () => {
-    try {
-        const params = {
-            TableName: COMPLIANCE_ADDITIONALS,
-        };
+  try {
+    const params = {
+      TableName: COMPLIANCE_ADDITIONALS,
+    };
 
-        const data = await dynamoClient.send(new ScanCommand(params));
+    const data = await dynamoClient.send(new ScanCommand(params));
 
-        return data.Items;
-    } catch (error: any) {
-        console.log('Error in getCustomerRelations', error);
-    }
+    return data.Items;
+  } catch (error: any) {
+    console.log('Error in getCustomerRelations', error);
+  }
 };
 
 export const getCustomerSites = async () => {
-    try {
-        const params = {
-            TableName: CUSTOMER_TABLE,
-        };
+  try {
+    const params = {
+      TableName: CUSTOMER_TABLE,
+    };
 
-        const data = await dynamoClient.send(new ScanCommand(params));
+    const data = await dynamoClient.send(new ScanCommand(params));
 
-        return data.Items;
-    } catch (error: any) {
-        console.log('Error in getCustomerRelations', error);
-    }
+    return data.Items;
+  } catch (error: any) {
+    console.log('Error in getCustomerRelations', error);
+  }
 };
-
 
 export async function updateComplianceRating({
   complianceId,
@@ -64,19 +63,22 @@ export async function updateComplianceRating({
   const updateParams = {
     TableName: COMPLIANCE_TABLE,
     Key: {
-      id: { S: complianceId }
+      id: { S: complianceId },
     },
-    UpdateExpression: 'SET complianceRating = :rating, complianceRating30Days = :rating30, updatedAt = :updatedAt',
+    UpdateExpression:
+      'SET complianceRating = :rating, complianceRating30Days = :rating30, updatedAt = :updatedAt',
     ExpressionAttributeValues: {
       ':rating': { S: complianceRating.toString() },
       ':rating30': { S: complianceRating30Days.toString() },
-      ':updatedAt': { S: now }
-    }
+      ':updatedAt': { S: now },
+    },
   };
 
   try {
     await dynamoClient.send(new UpdateItemCommand(updateParams));
-    logger.info(`Updated compliance ${complianceId} with rating ${complianceRating}%, 30-day: ${complianceRating30Days}%`);
+    logger.info(
+      `Updated compliance ${complianceId} with rating ${complianceRating}%, 30-day: ${complianceRating30Days}%`
+    );
   } catch (error) {
     logger.error(`Failed to update compliance ${complianceId}:`, error);
     throw error;
