@@ -10,15 +10,15 @@ const xeroService = {
         const body = new URLSearchParams({
             grant_type: 'authorization_code',
             code,
-            redirect_uri: REDIRECT_URI
+            redirect_uri: REDIRECT_URI,
         }).toString();
         const response = await fetch('https://identity.xero.com/connect/token', {
             method: 'POST',
             headers: {
                 Authorization: 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'),
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body
+            body,
         });
         if (!response.ok)
             throw new Error(`Token exchange failed: ${await response.text()}`);
@@ -26,7 +26,7 @@ const xeroService = {
     },
     getTenants: async (accessToken) => {
         const response = await fetch('https://api.xero.com/connections', {
-            headers: { Authorization: `Bearer ${accessToken}` }
+            headers: { Authorization: `Bearer ${accessToken}` },
         });
         if (!response.ok)
             throw new Error(`Fetching tenants failed: ${await response.text()}`);
@@ -38,8 +38,8 @@ const xeroService = {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
                 'Xero-tenant-id': tenantId,
-                Accept: 'application/json'
-            }
+                Accept: 'application/json',
+            },
         });
         if (!response.ok)
             throw new Error(`Fetching bills failed: ${await response.text()}`);
@@ -51,12 +51,12 @@ const xeroService = {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
                 'Xero-tenant-id': tenantId,
-                Accept: 'application/json'
-            }
+                Accept: 'application/json',
+            },
         });
         if (!response.ok)
             throw new Error(`Fetching invoices failed: ${await response.text()}`);
         return response.json();
-    }
+    },
 };
 export default xeroService;

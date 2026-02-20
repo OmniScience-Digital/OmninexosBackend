@@ -86,78 +86,9 @@ const hasValidCertificate = (employee, certType) => {
     }
     return { hasCert: false, isExpired: false, expiresIn30Days: false };
 };
-// Calculate compliance ratings for a single compliance record
-// const calculateComplianceRatings = (
-//     compliance: DynamoDBComplianceRecord,
-//     employees: DynamoDbEmployeeItem[],
-//     additionals: DynamoDBComplianceAdditional[] = []
-// ): {
-//     complianceRating: number;
-//     complianceRating30Days: number;
-//     totalRequirements: number;
-//     expiredRequirements: number;
-//     expiringIn30Days: number;
-//     additionalPenalty: number;
-// } => {
-//     const linkedEmployeeIds = extractArray(compliance.linkedEmployees);
-//     const employeeLookup = parseEmployeeLookup(compliance.employeeLookup);
-//     // Filter to only employees that are linked to this compliance
-//     const relevantEmployees = employees.filter(emp => {
-//         const employeeId = extractValue(emp.employee.id);
-//         return employeeId && linkedEmployeeIds.includes(employeeId);
-//     });
-//     let totalRequirements = 0;
-//     let expiredRequirements = 0;
-//     let expiringIn30Days = 0;
-//     // Check requirements from employeeLookup (includes dynamic additional certificates)
-//     for (const employee of relevantEmployees) {
-//         const employeeId = extractValue(employee.employee.id);
-//         if (!employeeId) continue;
-//         // Get all required certificate types for this employee from employeeLookup
-//         const requiredCertTypes = employeeLookup[employeeId] || [];
-//         for (const certType of requiredCertTypes) {
-//             totalRequirements++;
-//             const certStatus = hasValidCertificate(employee, certType);
-//             if (!certStatus.hasCert || certStatus.isExpired) {
-//                 expiredRequirements++;
-//             } else if (certStatus.expiresIn30Days) {
-//                 expiringIn30Days++;
-//             }
-//         }
-//     }
-//     // Calculate additional documents penalty (10% per expired/expiring document)
-//     let additionalPenalty = 0;
-//     for (const additional of additionals) {
-//         const expiryDate = parseDate(extractValue(additional.expirey));
-//         if (isExpired(expiryDate) || expiresIn30Days(expiryDate)) {
-//             additionalPenalty += 0.1; // 10% penalty
-//         }
-//     }
-//     // Calculate ratings (0-100%)
-//     let complianceRating = 0;
-//     let complianceRating30Days = 0;
-//     if (totalRequirements > 0) {
-//         complianceRating = ((totalRequirements - expiredRequirements) / totalRequirements) * 100;
-//         complianceRating30Days = ((totalRequirements - expiringIn30Days) / totalRequirements) * 100;
-//     }
-//     // Apply additional penalty (can't go below 0%)
-//     complianceRating = Math.max(0, complianceRating - (additionalPenalty * 100));
-//     complianceRating30Days = Math.max(0, complianceRating30Days - (additionalPenalty * 100));
-//     return {
-//         complianceRating: Math.round(complianceRating),
-//         complianceRating30Days: Math.round(complianceRating30Days),
-//         totalRequirements,
-//         expiredRequirements,
-//         expiringIn30Days,
-//         additionalPenalty: additionalPenalty * 100,
-//     };
-// };
-const calculateComplianceRatings = (compliance, employees, allAdditionals = []) => {
-    const complianceId = extractValue(compliance.id);
+const calculateComplianceRatings = (compliance, employees, additionals = []) => {
     const linkedEmployeeIds = extractArray(compliance.linkedEmployees);
     const employeeLookup = parseEmployeeLookup(compliance.employeeLookup);
-    // ONLY check additionals that belong to THIS compliance
-    const additionals = allAdditionals.filter((additional) => extractValue(additional.complianceid) === complianceId);
     // Filter to only employees that are linked to this compliance
     const relevantEmployees = employees.filter((emp) => {
         const employeeId = extractValue(emp.employee.id);
@@ -166,118 +97,45 @@ const calculateComplianceRatings = (compliance, employees, allAdditionals = []) 
     let totalRequirements = 0;
     let expiredRequirements = 0;
     let expiringIn30Days = 0;
-    logger.info(`=== Processing Compliance: ${complianceId} ===`);
-    logger.info(`Linked Employees IDs: ${JSON.stringify(linkedEmployeeIds)}`);
-    logger.info(`Relevant Employees found: ${relevantEmployees.length}`);
-    logger.info(`Filtered ${additionals.length} of ${allAdditionals.length} additionals for this compliance`);
-    // ========== COUNT EMPLOYEE REQUIREMENTS ==========
+    // Check requirements from employeeLookup (includes dynamic additional certificates)
     for (const employee of relevantEmployees) {
         const employeeId = extractValue(employee.employee.id);
         if (!employeeId)
             continue;
+        // Get all required certificate types for this employee from employeeLookup
         const requiredCertTypes = employeeLookup[employeeId] || [];
-        const employeeName = extractValue(employee.employee.knownAs) ||
-            `${extractValue(employee.employee.firstName)} ${extractValue(employee.employee.surname)}`.trim();
-        logger.info(`Checking employee: ${employeeName} (ID: ${employeeId})`);
-        logger.info(`Required cert types: ${JSON.stringify(requiredCertTypes)}`);
         for (const certType of requiredCertTypes) {
             totalRequirements++;
             const certStatus = hasValidCertificate(employee, certType);
-            logger.info(`  Certificate: ${certType}`);
-            logger.info(`    Has Cert: ${certStatus.hasCert}`);
-            logger.info(`    Is Expired: ${certStatus.isExpired}`);
-            logger.info(`    Expires in 30 Days: ${certStatus.expiresIn30Days}`);
             if (!certStatus.hasCert || certStatus.isExpired) {
                 expiredRequirements++;
-                logger.info(`    STATUS: EXPIRED/MISSING (Total expired: ${expiredRequirements})`);
             }
             else if (certStatus.expiresIn30Days) {
                 expiringIn30Days++;
-                logger.info(`    STATUS: EXPIRING IN 30 DAYS (Total expiring: ${expiringIn30Days})`);
-            }
-            else {
-                logger.info(`    STATUS: VALID`);
             }
         }
     }
-    // ========== COUNT SITE ADDITIONAL DOCUMENTS ==========
-    let additionalExpired = 0;
-    let additionalExpiringIn30Days = 0;
+    // Calculate additional documents penalty (10% per expired/expiring document)
     let additionalPenalty = 0;
-    logger.info(`--- CHECKING SITE ADDITIONAL DOCUMENTS (${additionals.length} total) ---`);
     for (const additional of additionals) {
         const expiryDate = parseDate(extractValue(additional.expirey));
-        const docName = extractValue(additional.name) || "Unnamed";
-        const isCritical = extractValue(additional.critical) === "true" ||
-            extractValue(additional.critical) === "1" ||
-            extractValue(additional.critical)?.toLowerCase() === "yes";
-        totalRequirements++; // Site documents count in total requirements
-        logger.info(`  Additional: ${docName}`);
-        logger.info(`    Expiry Date: ${expiryDate ? expiryDate.toISOString().split("T")[0] : "None"}`);
-        logger.info(`    Is Critical: ${isCritical}`);
-        if (isExpired(expiryDate)) {
-            additionalExpired++;
-            logger.info(`    STATUS: EXPIRED`);
-            if (isCritical) {
-                additionalPenalty += 0.1; // 10% penalty for critical expired
-                logger.info(`    CRITICAL - PENALTY APPLIED: +10%`);
-            }
-        }
-        else if (expiresIn30Days(expiryDate)) {
-            additionalExpiringIn30Days++;
-            logger.info(`    STATUS: EXPIRING IN 30 DAYS`);
-            if (isCritical) {
-                additionalPenalty += 0.1; // 10% penalty for critical expiring
-                logger.info(`    CRITICAL - PENALTY APPLIED: +10%`);
-            }
-        }
-        else {
-            logger.info(`    STATUS: VALID`);
+        if (isExpired(expiryDate) || expiresIn30Days(expiryDate)) {
+            additionalPenalty += 0.1; // 10% penalty
         }
     }
-    // Combine employee and additional counts
-    expiredRequirements += additionalExpired;
-    expiringIn30Days += additionalExpiringIn30Days;
-    logger.info(`--- TOTALS ---`);
-    logger.info(`Total Requirements: ${totalRequirements} (${relevantEmployees.length} employees + ${additionals.length} site docs)`);
-    logger.info(`Expired/Missing: ${expiredRequirements}`);
-    logger.info(`Expiring in 30 Days: ${expiringIn30Days}`);
-    logger.info(`Valid for Current (total - expired): ${totalRequirements - expiredRequirements}`);
-    logger.info(`Valid for 30-Day (total - expired - expiring): ${totalRequirements - expiredRequirements - expiringIn30Days}`);
     // Calculate ratings (0-100%)
     let complianceRating = 0;
     let complianceRating30Days = 0;
     if (totalRequirements > 0) {
-        const validForCurrent = totalRequirements - expiredRequirements;
-        const validFor30Days = totalRequirements - expiredRequirements - expiringIn30Days;
-        complianceRating = (validForCurrent / totalRequirements) * 100;
-        complianceRating30Days = (validFor30Days / totalRequirements) * 100;
-        logger.info(`--- CALCULATION ---`);
-        logger.info(`Valid for Current: ${totalRequirements} - ${expiredRequirements} = ${validForCurrent}`);
-        logger.info(`Valid for 30-Day: ${totalRequirements} - ${expiredRequirements} - ${expiringIn30Days} = ${validFor30Days}`);
-        logger.info(`Current Rating Formula: (${validForCurrent} / ${totalRequirements}) * 100`);
-        logger.info(`Current Rating: ${complianceRating}%`);
-        logger.info(`30-Day Rating Formula: (${validFor30Days} / ${totalRequirements}) * 100`);
-        logger.info(`30-Day Rating: ${complianceRating30Days}%`);
+        complianceRating = ((totalRequirements - expiredRequirements) / totalRequirements) * 100;
+        complianceRating30Days = ((totalRequirements - expiringIn30Days) / totalRequirements) * 100;
     }
     // Apply additional penalty (can't go below 0%)
-    const ratingBeforePenalty = complianceRating;
-    const rating30BeforePenalty = complianceRating30Days;
     complianceRating = Math.max(0, complianceRating - additionalPenalty * 100);
     complianceRating30Days = Math.max(0, complianceRating30Days - additionalPenalty * 100);
-    logger.info(`--- APPLYING PENALTIES ---`);
-    logger.info(`Additional Penalty Total (CRITICAL docs only): ${additionalPenalty * 100}%`);
-    logger.info(`Current: ${ratingBeforePenalty}% - ${additionalPenalty * 100}% = ${complianceRating}%`);
-    logger.info(`30-Day: ${rating30BeforePenalty}% - ${additionalPenalty * 100}% = ${complianceRating30Days}%`);
-    // Ensure 30-day rating never exceeds current rating
-    complianceRating30Days = Math.min(complianceRating30Days, complianceRating);
-    logger.info(`=== FINAL RESULTS ===`);
-    logger.info(`Compliance Rating: ${Math.round(complianceRating)}%`);
-    logger.info(`30-Day Compliance Rating: ${Math.round(complianceRating30Days)}%`);
-    logger.info(`======================`);
     return {
-        complianceRating: parseFloat(Number(complianceRating).toFixed(1)),
-        complianceRating30Days: parseFloat(Number(complianceRating30Days).toFixed(1)),
+        complianceRating: Math.round(complianceRating),
+        complianceRating30Days: Math.round(complianceRating30Days),
         totalRequirements,
         expiredRequirements,
         expiringIn30Days,

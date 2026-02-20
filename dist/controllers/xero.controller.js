@@ -10,7 +10,9 @@ export const xeroController = {
         }
         catch (error) {
             logger.error("Error generating Xero auth URL", error);
-            res.status(500).json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
+            res
+                .status(500)
+                .json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
         }
     },
     // GET /callback → Xero sends authorization code here
@@ -23,14 +25,19 @@ export const xeroController = {
             }
             logger.info("Received Xero callback, exchanging code for tokens");
             const tokens = await xeroService.exchangeCodeForToken(code);
-            logger.info("Xero tokens received", { accessToken: tokens.access_token, refreshToken: tokens.refresh_token });
+            logger.info("Xero tokens received", {
+                accessToken: tokens.access_token,
+                refreshToken: tokens.refresh_token,
+            });
             const tenants = await xeroService.getTenants(tokens.access_token);
             logger.info("Xero tenants fetched", tenants);
             res.status(200).json({ success: true, message: "Xero connected!", tokens, tenants });
         }
         catch (error) {
             logger.error("Error handling Xero callback", error);
-            res.status(500).json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
+            res
+                .status(500)
+                .json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
         }
     },
     fetchBills: async (req, res) => {
@@ -48,7 +55,9 @@ export const xeroController = {
         }
         catch (error) {
             logger.error("Error fetching bills", error);
-            res.status(500).json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
+            res
+                .status(500)
+                .json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
         }
     },
     fetchInvoices: async (req, res) => {
@@ -65,7 +74,9 @@ export const xeroController = {
         }
         catch (error) {
             logger.error("Error fetching invoices", error);
-            res.status(500).json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
+            res
+                .status(500)
+                .json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
         }
-    }
+    },
 };

@@ -49,7 +49,7 @@ export async function createXeroQuote(data) {
     console.log('Quote creation response:', JSON.stringify(result, null, 2));
     return result;
 }
-// To create a quote we need a contact 
+// To create a quote we need a contact
 // - A quote always belongs to a customer/contact.
 // - You either:
 //     1. Use an **existing contact** (like “Marine Systems”), or

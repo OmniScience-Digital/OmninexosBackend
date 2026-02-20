@@ -2,7 +2,7 @@ import logger from "../utils/logger.js";
 export const xeroControllerRouter = async (req, res) => {
     try {
         logger.info("Executing Xero Bill Webhook control route.");
-        logger.info(JSON.stringify(req.body, null, 2));
+        logger.info(JSON.stringify(req.body));
         res.status(200).json({ success: true, message: "Xero Bill Updated successfully" });
     }
     catch (error) {
