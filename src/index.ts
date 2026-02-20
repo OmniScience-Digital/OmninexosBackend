@@ -7,44 +7,42 @@ import executiontime from './middlewares/execution.middleware';
 import errorhandling from './middlewares/errorhandling.middleware';
 import routes from './routes/api.route';
 
-const config = {
-  port: process.env.PORT,
-  host: process.env.HOST,
-};
-
-//Server Port
-const port = config.port;
+const port = process.env.PORT;
 const app = express();
 
-// Trust the proxy
 app.set('trust proxy', true);
 
-// Middleware to parse JSON bodies
-app.use(express.json({ limit: '10mb' })); // Increase limit as needed
+/* ===============================
+   IMPORTANT:XERO WEBHOOK RAW BODY
+================================= */
+app.use('/api/v1/xero/xeroBillwebhook', express.raw({ type: 'application/json' }));
+
+/* ===============================
+   Normal Body Parsers (after)
+================================= */
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-//Enable Cors
+/* =============================== */
 app.use(
   cors({
     origin: '*',
-    methods: 'Get,POST',
+    methods: 'GET,POST',
     credentials: true,
   })
 );
 
-//json compression
 app.use(compression());
 
-//register routes
+/* ===============================
+   Routes
+================================= */
 app.use('/', routes);
 
-app.listen(port, async () => {
-  logger.info(`App is running  at http://localhost:${port}`);
+app.listen(port, () => {
+  logger.info(`App is running at http://localhost:${port}`);
   logger.info(`Running on env : ${process.env.NODE_ENV}`);
 });
 
-//logging middleware
 executiontime(app);
-
-//Error handling middleware
 errorhandling(app);
