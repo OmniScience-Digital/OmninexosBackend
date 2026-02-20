@@ -1,20 +1,33 @@
+import crypto from 'crypto';
 import logger from '../utils/logger';
 import { Request, Response } from 'express';
 
 export const xeroControllerRouter = async (req: Request, res: Response) => {
   try {
-    logger.info('Executing Xero Bill Webhook control route.');
-    logger.info(JSON.stringify(req.body));
+    const signature = req.headers['x-xero-signature'] as string;
 
-    res.status(200).json({ success: true, message: 'Xero Bill Updated successfully' });
-  } catch (error: any) {
-    logger.error('Failed to update Xero Bill:', error);
-    console.error(error);
+    if (!signature) {
+      return res.status(401).send('Missing signature');
+    }
 
-    res.status(500).json({
-      success: false,
-      error: 'Error Xero Bill not  Updated',
-      details: (error as Error).message,
-    });
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.XERO_WEBHOOK_KEY!)
+      .update(req.body) // RAW BUFFER
+      .digest('base64');
+
+    if (signature !== expectedSignature) {
+      logger.error('Invalid Xero signature');
+      return res.status(401).send('Invalid signature');
+    }
+
+    logger.info('Xero webhook verified');
+
+    const body = JSON.parse(req.body.toString());
+    logger.info(JSON.stringify(body));
+
+    return res.status(200).send('OK'); // IMPORTANT
+  } catch (error) {
+    logger.error('Webhook error', error);
+    return res.status(500).send('Webhook error');
   }
 };
