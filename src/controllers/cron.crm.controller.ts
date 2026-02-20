@@ -183,7 +183,11 @@ const hasValidCertificate = (
 const calculateComplianceRatings = (
   compliance: DynamoDBComplianceRecord,
   employees: DynamoDbEmployeeItem[],
+<<<<<<< HEAD
   allAdditionals: DynamoDBComplianceAdditional[] = []
+=======
+  additionals: DynamoDBComplianceAdditional[] = []
+>>>>>>> main
 ): {
   complianceRating: number;
   complianceRating30Days: number;
@@ -192,6 +196,7 @@ const calculateComplianceRatings = (
   expiringIn30Days: number;
   additionalPenalty: number;
 } => {
+<<<<<<< HEAD
   const complianceId = extractValue(compliance.id);
   const linkedEmployeeIds = extractArray(compliance.linkedEmployees);
   const employeeLookup = parseEmployeeLookup(compliance.employeeLookup);
@@ -248,10 +253,42 @@ const calculateComplianceRatings = (
         logger.info(`    STATUS: EXPIRING IN 30 DAYS (Total expiring: ${expiringIn30Days})`);
       } else {
         logger.info(`    STATUS: VALID`);
+=======
+  const linkedEmployeeIds = extractArray(compliance.linkedEmployees);
+  const employeeLookup = parseEmployeeLookup(compliance.employeeLookup);
+
+  // Filter to only employees that are linked to this compliance
+  const relevantEmployees = employees.filter((emp) => {
+    const employeeId = extractValue(emp.employee.id);
+    return employeeId && linkedEmployeeIds.includes(employeeId);
+  });
+
+  let totalRequirements = 0;
+  let expiredRequirements = 0;
+  let expiringIn30Days = 0;
+
+  // Check requirements from employeeLookup (includes dynamic additional certificates)
+  for (const employee of relevantEmployees) {
+    const employeeId = extractValue(employee.employee.id);
+    if (!employeeId) continue;
+
+    // Get all required certificate types for this employee from employeeLookup
+    const requiredCertTypes = employeeLookup[employeeId] || [];
+
+    for (const certType of requiredCertTypes) {
+      totalRequirements++;
+      const certStatus = hasValidCertificate(employee, certType);
+
+      if (!certStatus.hasCert || certStatus.isExpired) {
+        expiredRequirements++;
+      } else if (certStatus.expiresIn30Days) {
+        expiringIn30Days++;
+>>>>>>> main
       }
     }
   }
 
+<<<<<<< HEAD
   // ========== COUNT SITE ADDITIONAL DOCUMENTS ==========
   let additionalExpired = 0;
   let additionalExpiringIn30Days = 0;
@@ -358,6 +395,35 @@ const calculateComplianceRatings = (
   return {
     complianceRating: parseFloat(Number(complianceRating).toFixed(1)),
     complianceRating30Days: parseFloat(Number(complianceRating30Days).toFixed(1)),
+=======
+  // Calculate additional documents penalty (10% per expired/expiring document)
+  let additionalPenalty = 0;
+
+  for (const additional of additionals) {
+    const expiryDate = parseDate(extractValue(additional.expirey));
+
+    if (isExpired(expiryDate) || expiresIn30Days(expiryDate)) {
+      additionalPenalty += 0.1; // 10% penalty
+    }
+  }
+
+  // Calculate ratings (0-100%)
+  let complianceRating = 0;
+  let complianceRating30Days = 0;
+
+  if (totalRequirements > 0) {
+    complianceRating = ((totalRequirements - expiredRequirements) / totalRequirements) * 100;
+    complianceRating30Days = ((totalRequirements - expiringIn30Days) / totalRequirements) * 100;
+  }
+
+  // Apply additional penalty (can't go below 0%)
+  complianceRating = Math.max(0, complianceRating - additionalPenalty * 100);
+  complianceRating30Days = Math.max(0, complianceRating30Days - additionalPenalty * 100);
+
+  return {
+    complianceRating: Math.round(complianceRating),
+    complianceRating30Days: Math.round(complianceRating30Days),
+>>>>>>> main
     totalRequirements,
     expiredRequirements,
     expiringIn30Days,
