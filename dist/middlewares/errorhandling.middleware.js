@@ -13,16 +13,14 @@ function errorhandling(app) {
             headers: {
                 "user-agent": req.headers["user-agent"],
                 "content-type": req.headers["content-type"],
-                "x-xero-signature": req.headers["x-xero-signature"] ? "present" : "missing"
-            }
+                "x-xero-signature": req.headers["x-xero-signature"] ? "present" : "missing",
+            },
         });
         // Don't expose error details in production
-        const errorMessage = process.env.NODE_ENV === "production"
-            ? "Internal Server Error"
-            : err.message;
+        const errorMessage = process.env.NODE_ENV === "production" ? "Internal Server Error" : err.message;
         res.status(500).json({
             error: errorMessage,
-            requestId: Date.now() // For tracking in logs
+            requestId: Date.now(), // For tracking in logs
         });
     });
 }

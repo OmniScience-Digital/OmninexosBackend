@@ -10,8 +10,7 @@ function executiontime(app) {
             const status = res.statusCode;
             // Log with emoji based on status
             const statusEmoji = status >= 400 ? "\u274C" : status >= 300 ? "\u21AA\uFE0F" : "\u2705";
-            logger.info(`${statusEmoji} ${req.method} ${req.url} - ` +
-                `Status: ${status} - Duration: ${duration}ms`);
+            logger.info(`${statusEmoji} ${req.method} ${req.url} - ` + `Status: ${status} - Duration: ${duration}ms`);
         });
         next();
     });
