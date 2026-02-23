@@ -21,3 +21,5 @@ export default router;
 // curl -X POST https://apqirzaiib.execute-api.us-east-1.amazonaws.com/api/v1/xeroBillwebhook \
 //   -H "Content-Type: application/json" \
 //   -d '{"test": "data"}'
+
+//https://wq3qo9l3de.execute-api.us-east-1.amazonaws.com/xero-webhook

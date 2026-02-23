@@ -1,50 +1,50 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
 import 'dotenv/config';
-import crypto from 'crypto';
+import cors from 'cors';
+import compression from 'compression';
+import logger from './utils/logger';
+import executiontime from './middlewares/execution.middleware';
+import errorhandling from './middlewares/errorhandling.middleware';
+import routes from './routes/api.route';
 
+const config = {
+  port: process.env.PORT,
+  host: process.env.HOST,
+};
+
+//Server Port
+const port = config.port;
 const app = express();
-const PORT: number = parseInt(process.env.PORT || '5001', 10);
-const WEBHOOK_KEY = process.env.XERO_WEBHOOK_KEY || '';
 
-// Other middleware can be used for other routes
-app.use(express.json());
+// Trust the proxy
+app.set('trust proxy', true);
 
-app.post('/xero-webhook', (req: Request, res: Response) => {
-  const xeroSignature = req.headers['x-xero-signature'] as string;
-  const computedSignature = crypto
-    .createHmac('sha256', Buffer.from(WEBHOOK_KEY, 'utf8'))
-    .update(req.body) // Use the raw body
-    .digest('base64');
+// Middleware to parse JSON bodies
+app.use(express.json({ limit: '10mb' })); // Increase limit as needed
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  if (xeroSignature === computedSignature) {
-    console.log('Signature passed! This is from Xero!');
+//Enable Cors
+app.use(
+  cors({
+    origin: '*',
+    methods: 'Get,POST',
+    credentials: true,
+  })
+);
 
-    // Process the events in the background (see Step 3)
-    const payload = JSON.parse(req.body.toString());
-    processWebhookEvents(payload.events);
+//json compression
+app.use(compression());
 
-    // Respond immediately with 200 OK
-    res.sendStatus(200);
-  } else {
-    console.log('Signature failed.');
-    res.sendStatus(401);
-  }
+//register routes
+app.use('/', routes);
+
+app.listen(port, async () => {
+  logger.info(`App is running  at http://localhost:${port}`);
+  logger.info(`Running on env : ${process.env.NODE_ENV}`);
 });
 
-function processWebhookEvents(events: any[]) {
-  // Iterate through all events in the payload (a single payload can have multiple events)
-  events.forEach((event) => {
-    // e.g. add to a processing queue or database
-    console.log(
-      `Processing event: ${event.eventType} on resource ${event.resourceId} for tenant ${event.tenantId}`
-    );
-    // A separate worker process should then fetch the full resource details from the
-  });
-}
+//logging middleware
+executiontime(app);
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`📋 Webhook endpoint: http://localhost:${PORT}/xero-webhook`);
-  console.log(`🔑 Webhook key configured: ${!!WEBHOOK_KEY}`);
-  console.log(`🌐 Ngrok URL: https://unslumping-zariyah-sturdily.ngrok-free.dev/xero-webhook\n`);
-});
+//Error handling middleware
+errorhandling(app);
