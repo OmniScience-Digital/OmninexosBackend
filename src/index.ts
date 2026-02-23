@@ -1,82 +1,86 @@
-import express from 'express';
-import { Request, Response, NextFunction } from 'express';
+import express, { Request, Response } from 'express';
 import 'dotenv/config';
 import cors from 'cors';
 import compression from 'compression';
+import crypto from 'crypto';
 import logger from './utils/logger';
 import executiontime from './middlewares/execution.middleware';
 import errorhandling from './middlewares/errorhandling.middleware';
-import routes from './routes/api.route';
-
-const config = {
-  port: process.env.PORT || 3000,
-  host: process.env.HOST || 'localhost',
-};
 
 const app = express();
+const PORT = process.env.PORT;
+const HOST = process.env.HOST;
+const WEBHOOK_KEY = process.env.XERO_WEBHOOK_KEY;
 
-// Trust the proxy
+// Trust proxy
 app.set('trust proxy', true);
 
-// IMPORTANT: executiontime should be EARLY to measure everything
+// Execution time middleware
 executiontime(app);
 
-// Raw body capture middleware (BEFORE body parsing)
-app.use((req: Request, res: Response, next: NextFunction) => {
-  console.log(req);
-  if (req.path.includes('/xeroBillwebhook')) {
-    console.log('✅ Intent-to-receive request detected');
-    // Accept Intent-to-receive or real payload
-    if (!req.headers['x-xero-signature']) {
+// Enable CORS and compression
+app.use(cors({ origin: '*', methods: 'GET,POST', credentials: true }));
+app.use(compression());
+
+// Use raw parser only for Xero webhook
+app.use('/api/v1/xero/xeroBillwebhook', express.raw({ type: '*/*', limit: '10mb' }));
+
+// Xero webhook endpoint
+app.post('/api/v1/xero/xeroBillwebhook', (req: Request, res: Response) => {
+  try {
+    const signature = req.headers['x-xero-signature'] as string;
+
+    // Intent-to-receive request
+    if (!signature) {
       console.log('✅ Intent-to-receive request detected');
-      return res.status(200).send('OK'); // must return 2XX
+      return res.status(200).send('OK');
     }
 
-    let data = '';
-    req.setEncoding('utf8');
+    if (!WEBHOOK_KEY) {
+      logger.error('XERO_WEBHOOK_KEY not configured');
+      return res.status(500).send('Webhook key missing');
+    }
 
-    req.on('data', (chunk) => {
-      data += chunk;
-    });
+    const rawBody = req.body as Buffer;
 
-    req.on('end', () => {
-      (req as any).rawBody = data;
-      next();
-    });
+    // Verify signature
+    const hmac = crypto.createHmac('sha256', WEBHOOK_KEY);
+    hmac.update(rawBody);
+    const computedSignature = hmac.digest('base64');
 
-    req.on('error', (err) => {
-      logger.error('Error reading raw body:', err);
-      next(err);
-    });
-  } else {
-    next();
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(computedSignature))) {
+      console.log('❌ Signature verification failed');
+      return res.status(401).send('Invalid signature');
+    }
+
+    console.log('✅ Xero webhook received and verified');
+
+    // Parse payload and process asynchronously
+    try {
+      const payload = JSON.parse(rawBody.toString());
+      if (payload.events) {
+        payload.events.forEach((event: any) => {
+          console.log(`Processing event: ${event.eventType} on resource ${event.resourceId}`);
+          // Add background processing here
+        });
+      }
+    } catch (parseError) {
+      logger.error('Error parsing webhook body:', parseError);
+    }
+
+    // Respond immediately
+    res.status(200).send('OK');
+  } catch (error) {
+    logger.error('Webhook handler error:', error);
+    res.status(500).send('Server error');
   }
 });
 
-// Body parsers
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Enable Cors
-app.use(
-  cors({
-    origin: '*',
-    methods: 'GET,POST',
-    credentials: true,
-  })
-);
-
-// JSON compression
-app.use(compression());
-
-// Register routes
-app.use('/', routes);
-
-// Error handling should be LAST
+// Error handling middleware
 errorhandling(app);
 
-app.listen(config.port, () => {
-  logger.info(`App running at http://${config.host}:${config.port}`);
+app.listen(PORT, () => {
+  logger.info(`App running at http://${HOST}:${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV}`);
 });
 

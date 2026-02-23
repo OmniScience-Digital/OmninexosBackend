@@ -8,7 +8,7 @@ import xeroApi from './xero.auth.route';
 import xeroQuoteApi from './xero.quote.route';
 import xeroBillApi from './xero.bill.route';
 
-routes.use('/api/v1/xeroBillwebhook', xeroBillApi); // Most specific first
+routes.use('/api/v1', xeroBillApi); // Most specific first
 routes.use('/api/v1', stockControllerApi);
 routes.use('/api/v1', clickupApi);
 routes.use('/api/v1', clickupVifApi);

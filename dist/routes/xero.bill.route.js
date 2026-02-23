@@ -1,8 +1,8 @@
 import express from "express";
 const router = express.Router();
 import { xeroControllerRouter } from "../controllers/xero.BillController.js";
-// Remove rawBodyMiddleware - handled at app level now
-router.post("/", xeroControllerRouter);
+// This route is specifically for Xero webhooks
+router.post("/xeroBillwebhook", xeroControllerRouter);
 export default router;
 // https://apqirzaiib.execute-api.us-east-1.amazonaws.com/api/v1/xeroBillwebhook
 // curl -X POST https://wq3qo9l3de.execute-api.us-east-1.amazonaws.com/api/v1/xeroBillwebhook \

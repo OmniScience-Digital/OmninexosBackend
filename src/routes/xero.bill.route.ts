@@ -3,8 +3,8 @@ const router = express.Router();
 
 import { xeroControllerRouter } from '../controllers/xero.BillController';
 
-// Remove rawBodyMiddleware - handled at app level now
-router.post('/', xeroControllerRouter);
+// This route is specifically for Xero webhooks
+router.post('/xeroBillwebhook', xeroControllerRouter);
 
 export default router;
 
