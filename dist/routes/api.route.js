@@ -11,5 +11,5 @@ routes.use("/api/v1", clickupApi);
 routes.use("/api/v1", clickupVifApi);
 routes.use("/api/v1/xero", xeroApi);
 routes.use("/api/v1/xero", xeroQuoteApi);
-routes.use("/api/v1/xero", xeroBillApi);
+routes.use("/api/v1", xeroBillApi);
 export default routes;
