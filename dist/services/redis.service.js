@@ -1,28 +1,18 @@
-// services/redis.service.ts
-import { createClient } from 'redis';
-const redisClient = createClient({
-    url: process.env.redisUrl || 'redis://localhost:6379',
-});
-redisClient.on('error', (err) => console.error('Redis Client Error', err));
-export const connectRedis = async () => {
-    if (!redisClient.isOpen) {
-        await redisClient.connect();
+// redisClient.ts
+import { createClient } from "redis";
+import logger from "../utils/logger.js";
+const redisUrl = process.env.redisUrl;
+export const client = createClient({ url: redisUrl });
+client.on("error", (err) => console.error("Redis Client Error:", err));
+client.on("ready", () => console.log(`✅ Redis client ready at ${redisUrl}`));
+(async () => {
+    try {
+        await client.connect();
+        logger.info("\u2705 Connected to Redis successfully");
+        //client.set('xero:refresh_token', "74QrFEMHuTA2evidcRVA-HMYGJwAr9S4PjWO513QBdw");
+        //console.log(await client.get('xero:refresh_token'));
     }
-};
-export const redisService = {
-    // Store task ID for session
-    setTaskSession: async (sessionId, taskId, ttl = 600) => {
-        await connectRedis();
-        await redisClient.setEx(`vif:${sessionId}`, ttl, taskId);
-    },
-    // Get task ID for session
-    getTaskSession: async (sessionId) => {
-        await connectRedis();
-        return await redisClient.get(`vif:${sessionId}`);
-    },
-    // Delete session
-    deleteTaskSession: async (sessionId) => {
-        await connectRedis();
-        await redisClient.del(`vif:${sessionId}`);
-    },
-};
+    catch (err) {
+        logger.error("\u274C Failed to connect to Redis:", err);
+    }
+})();

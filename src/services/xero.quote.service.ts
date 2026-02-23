@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
+import { client } from '../services/redis.service';
 
 const TENANT_ID = process.env.XERO_TENANT_ID!;
-let REFRESH_TOKEN = process.env.XERO_REFRESH_TOKEN!;
 
 interface XeroTokenResponse {
   access_token: string;
@@ -27,10 +27,17 @@ interface QuoteData {
 }
 
 // Get a fresh access token using the refresh token
-async function getAccessToken(): Promise<string> {
+export async function getAccessToken(): Promise<string> {
+  // Get refresh token from Redis
+  const refreshToken = await client.get('xero:refresh_token');
+
+  if (!refreshToken) {
+    throw new Error('No refresh token found in Redis');
+  }
+
   const params = new URLSearchParams();
   params.append('grant_type', 'refresh_token');
-  params.append('refresh_token', REFRESH_TOKEN);
+  params.append('refresh_token', refreshToken);
   params.append('client_id', process.env.XERO_CLIENT_ID!);
   params.append('client_secret', process.env.XERO_SECRET!);
 
@@ -42,15 +49,10 @@ async function getAccessToken(): Promise<string> {
 
   if (!res.ok) throw new Error(`Failed to refresh Xero token: ${res.statusText}`);
 
-  // Cast the JSON result to XeroTokenResponse
   const data = (await res.json()) as XeroTokenResponse;
 
-  // Update refresh token in memory only
-  REFRESH_TOKEN = data.refresh_token;
-
-  console.log('Access Token:', data.access_token);
-  console.log('New Refresh Token:', data.refresh_token);
-  //   console.log('Expires in:', data.expires_in, 'seconds');
+  // Store the new refresh token in Redis
+  await client.set('xero:refresh_token', data.refresh_token);
 
   return data.access_token;
 }

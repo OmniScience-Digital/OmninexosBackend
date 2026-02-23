@@ -1,13 +1,85 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import fetch from 'node-fetch';
 import logger from '../utils/logger';
+import { getAccessToken } from '../services/xero.quote.service';
+
+/*
+|--------------------------------------------------------------------------
+| Types
+|--------------------------------------------------------------------------
+*/
+
+export interface XeroWebhookEvent {
+  resourceUrl: string;
+  resourceId: string;
+  tenantId: string;
+  tenantType: 'ORGANISATION' | string;
+  eventCategory: 'INVOICE' | 'CONTACT' | 'SUBSCRIPTION' | string;
+  eventType: 'CREATE' | 'UPDATE' | 'DELETE';
+  eventDateUtc: string;
+}
+
+export interface XeroWebhookPayload {
+  events: XeroWebhookEvent[];
+  firstEventSequence: number;
+  lastEventSequence: number;
+  entropy: string;
+}
+
+// Xero API response types
+interface LineItem {
+  Description: string;
+  Quantity: number;
+  UnitAmount: number;
+  AccountCode: string;
+  LineAmount: number;
+}
+
+interface Invoice {
+  InvoiceNumber: string;
+  Status: string;
+  Total: number;
+  invoiceID: string;
+  LineItems?: LineItem[];
+}
+
+interface Contact {
+  Name: string;
+  EmailAddress?: string;
+  ContactID: string;
+}
+
+interface Subscription {
+  Status: string;
+  Plan?: { Name: string };
+}
+
+interface XeroInvoiceResponse {
+  Invoices: Invoice[];
+}
+
+interface XeroContactResponse {
+  Contacts: Contact[];
+}
+
+interface XeroSubscriptionResponse {
+  Subscriptions: Subscription[];
+}
+
+/*
+|--------------------------------------------------------------------------
+| Controller
+|--------------------------------------------------------------------------
+*/
 
 export const xeroControllerRouter = async (req: Request, res: Response) => {
   try {
-    // Intent-to-receive request (no signature)
     const signature = req.headers['x-xero-signature'] as string;
+
+    // Intent-to-receive test
     if (!signature) {
-      console.log('✅ Intent-to-receive request detected');
+      console.log('✅ Intent-to-receive test passed');
       return res.status(200).send('OK');
     }
 
@@ -17,9 +89,8 @@ export const xeroControllerRouter = async (req: Request, res: Response) => {
       return res.status(500).send('Webhook key missing');
     }
 
-    const rawBody = req.body as Buffer; // express.raw() gives Buffer
+    const rawBody = req.body as Buffer;
 
-    // Verify Xero signature
     const hmac = crypto.createHmac('sha256', webhookKey);
     hmac.update(rawBody);
     const computedSignature = hmac.digest('base64');
@@ -29,29 +100,155 @@ export const xeroControllerRouter = async (req: Request, res: Response) => {
       return res.status(401).send('Unauthorized');
     }
 
-    console.log('🚀 Xero webhook verified, responding 200 immediately');
+    console.log('🚀 Xero webhook verified, returning 200');
 
-    // Respond immediately so Xero is happy
+    // Return 200 immediately (important for Xero)
     res.status(200).send('OK');
 
-    // Process payload asynchronously
-    const payload = JSON.parse(rawBody.toString('utf8'));
-    processWebhookEvents(payload);
+    // Process asynchronously
+    try {
+      const payload: XeroWebhookPayload = JSON.parse(rawBody.toString('utf8'));
+      await processWebhookEvents(payload);
+    } catch (err) {
+      logger.error('Failed to parse webhook payload:', err);
+    }
   } catch (error) {
     logger.error('Error in Xero webhook:', error);
     if (!res.headersSent) res.status(500).send('Internal Server Error');
   }
 };
 
-async function processWebhookEvents(payload: any) {
-  if (!payload.events) return;
+/*
+|--------------------------------------------------------------------------
+| Core Processing
+|--------------------------------------------------------------------------
+*/
+
+async function processWebhookEvents(payload: XeroWebhookPayload) {
+  if (!payload.events?.length) return;
 
   for (const event of payload.events) {
-    logger.info(
-      `Processing event: ${event.eventType} - ${event.resourceId} for tenant ${event.tenantId}`
-    );
-    // Place your business logic here
+    logger.info(`Processing: ${event.eventCategory} ${event.eventType} - ${event.resourceId}`);
+
+    switch (event.eventCategory) {
+      case 'INVOICE':
+        await handleInvoiceEvent(event);
+        break;
+
+      case 'CONTACT':
+        await handleContactEvent(event);
+        break;
+
+      case 'SUBSCRIPTION':
+        await handleSubscriptionEvent(event);
+        break;
+
+      default:
+        logger.warn(`Unhandled category: ${event.eventCategory}`);
+    }
   }
 
   logger.info('✅ Webhook processing complete');
+}
+
+/*
+|--------------------------------------------------------------------------
+| Xero Fetch Helper
+|--------------------------------------------------------------------------
+*/
+
+async function fetchFromXero<T>(url: string, tenantId: string): Promise<T> {
+  const ACCESS_TOKEN = await getAccessToken();
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      'xero-tenant-id': tenantId,
+      Accept: 'application/json',
+    },
+  });
+
+  if (!res.ok) throw new Error(`Xero fetch failed: ${res.status} ${res.statusText}`);
+
+  return (await res.json()) as T;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Invoice Handler
+|--------------------------------------------------------------------------
+*/
+
+async function handleInvoiceEvent(event: XeroWebhookEvent) {
+  try {
+    logger.info('Fetching invoice..');
+    const data = await fetchFromXero<XeroInvoiceResponse>(event.resourceUrl, event.tenantId);
+    const invoice = data?.Invoices?.[0];
+    if (!invoice) return;
+
+    console.log(invoice);
+
+    console.log('📄 Invoice:', invoice.InvoiceNumber);
+    console.log('📄 Invoice Id:', invoice.invoiceID);
+    console.log('Status:', invoice.Status);
+    console.log('Total:', invoice.Total);
+
+    const lineItems = invoice.LineItems || [];
+    for (const item of lineItems) {
+      console.log('---- LINE ITEM ----');
+      console.log('Description:', item.Description);
+      console.log('Quantity:', item.Quantity);
+      console.log('UnitAmount:', item.UnitAmount);
+      console.log('AccountCode:', item.AccountCode);
+      console.log('LineAmount:', item.LineAmount);
+    }
+
+    // 👉 Maintain update in your DB here
+  } catch (err) {
+    console.error('Invoice handler error:', err);
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Contact Handler
+|--------------------------------------------------------------------------
+*/
+
+async function handleContactEvent(event: XeroWebhookEvent) {
+  try {
+    const data = await fetchFromXero<XeroContactResponse>(event.resourceUrl, event.tenantId);
+    const contact = data?.Contacts?.[0];
+    if (!contact) return;
+
+    console.log('👤 Contact Name:', contact.Name);
+    console.log('Email:', contact.EmailAddress);
+
+    // 👉 Maintain contact updates in your DB here
+  } catch (err) {
+    logger.error('Contact handler error:', err);
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Subscription Handler
+|--------------------------------------------------------------------------
+*/
+
+async function handleSubscriptionEvent(event: XeroWebhookEvent) {
+  try {
+    const subscriptionUrl = `https://api.xero.com/subscriptions.xro/1.0/Subscriptions/${event.resourceId}`;
+    const data = await fetchFromXero<XeroSubscriptionResponse>(subscriptionUrl, event.tenantId);
+    const subscription = data?.Subscriptions?.[0];
+    if (!subscription) return;
+
+    console.log('💳 Subscription Status:', subscription.Status);
+    console.log('Plan:', subscription.Plan?.Name);
+
+    // 👉 Maintain subscription updates in your DB here
+  } catch (err) {
+    logger.error('Subscription handler error:', err);
+  }
 }
