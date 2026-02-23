@@ -3,6 +3,8 @@ import "dotenv/config";
 import cors from "cors";
 import compression from "compression";
 import logger from "./utils/logger.js";
+import executiontime from "./middlewares/execution.middleware.js";
+import errorhandling from "./middlewares/errorhandling.middleware.js";
 import routes from "./routes/api.route.js";
 const config = {
     port: process.env.PORT || 3000,
@@ -11,9 +13,10 @@ const config = {
 const app = express();
 // Trust the proxy
 app.set("trust proxy", true);
-// IMPORTANT: Raw body capture middleware - MUST come BEFORE any body parsing
+// IMPORTANT: executiontime should be EARLY to measure everything
+executiontime(app);
+// Raw body capture middleware (BEFORE body parsing)
 app.use((req, res, next) => {
-    // Only capture raw body for Xero webhook path
     if (req.path.includes("/xeroBillwebhook")) {
         let data = "";
         req.setEncoding("utf8");
@@ -22,7 +25,6 @@ app.use((req, res, next) => {
         });
         req.on("end", () => {
             req.rawBody = data;
-            // Don't parse JSON here, let the route handle it
             next();
         });
         req.on("error", (err) => {
@@ -34,7 +36,7 @@ app.use((req, res, next) => {
         next();
     }
 });
-// Standard middleware for all routes
+// Body parsers
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // Enable Cors
@@ -45,20 +47,12 @@ app.use(cors({
 }));
 // JSON compression
 app.use(compression());
-// Logging middleware
-app.use((req, res, next) => {
-    logger.info(`${req.method} ${req.path}`);
-    next();
-});
 // Register routes
 app.use("/", routes);
-// Error handling middleware
-app.use((err, req, res, next) => {
-    logger.error("Unhandled error:", err);
-    res.status(500).send("Internal Server Error");
-});
+// Error handling should be LAST
+errorhandling(app);
 app.listen(config.port, () => {
-    logger.info(`App is running at http://${config.host}:${config.port}`);
-    logger.info(`Running on env: ${process.env.NODE_ENV}`);
+    logger.info(`App running at http://${config.host}:${config.port}`);
+    logger.info(`Environment: ${process.env.NODE_ENV}`);
 });
 export default app;

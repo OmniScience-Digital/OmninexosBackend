@@ -18,9 +18,11 @@ const app = express();
 // Trust the proxy
 app.set('trust proxy', true);
 
-// IMPORTANT: Raw body capture middleware - MUST come BEFORE any body parsing
+// IMPORTANT: executiontime should be EARLY to measure everything
+executiontime(app);
+
+// Raw body capture middleware (BEFORE body parsing)
 app.use((req: Request, res: Response, next: NextFunction) => {
-  // Only capture raw body for Xero webhook path
   if (req.path.includes('/xeroBillwebhook')) {
     let data = '';
     req.setEncoding('utf8');
@@ -31,7 +33,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
     req.on('end', () => {
       (req as any).rawBody = data;
-      // Don't parse JSON here, let the route handle it
       next();
     });
 
@@ -44,7 +45,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// Standard middleware for all routes
+// Body parsers
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -60,24 +61,15 @@ app.use(
 // JSON compression
 app.use(compression());
 
-// Logging middleware
-app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path}`);
-  next();
-});
-
 // Register routes
 app.use('/', routes);
 
-// Error handling middleware
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  logger.error('Unhandled error:', err);
-  res.status(500).send('Internal Server Error');
-});
+// Error handling should be LAST
+errorhandling(app);
 
 app.listen(config.port, () => {
-  logger.info(`App is running at http://${config.host}:${config.port}`);
-  logger.info(`Running on env: ${process.env.NODE_ENV}`);
+  logger.info(`App running at http://${config.host}:${config.port}`);
+  logger.info(`Environment: ${process.env.NODE_ENV}`);
 });
 
 export default app;
