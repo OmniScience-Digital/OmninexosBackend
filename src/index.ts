@@ -23,7 +23,9 @@ executiontime(app);
 
 // Raw body capture middleware (BEFORE body parsing)
 app.use((req: Request, res: Response, next: NextFunction) => {
+  console.log(req);
   if (req.path.includes('/xeroBillwebhook')) {
+    console.log('✅ Intent-to-receive request detected');
     // Accept Intent-to-receive or real payload
     if (!req.headers['x-xero-signature']) {
       console.log('✅ Intent-to-receive request detected');

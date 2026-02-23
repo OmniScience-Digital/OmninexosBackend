@@ -17,7 +17,9 @@ app.set("trust proxy", true);
 executiontime(app);
 // Raw body capture middleware (BEFORE body parsing)
 app.use((req, res, next) => {
+    console.log(req);
     if (req.path.includes("/xeroBillwebhook")) {
+        console.log("\u2705 Intent-to-receive request detected");
         // Accept Intent-to-receive or real payload
         if (!req.headers["x-xero-signature"]) {
             console.log("\u2705 Intent-to-receive request detected");
