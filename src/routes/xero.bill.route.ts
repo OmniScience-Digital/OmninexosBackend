@@ -1,10 +1,10 @@
 import express from 'express';
 const router = express.Router();
-import { rawBodyMiddleware } from '../middlewares/rawbody.middleware';
+
 import { xeroControllerRouter } from '../controllers/xero.BillController';
 
-// IMPORTANT: Use raw body middleware BEFORE json parser for this route
-router.post('/xeroBillwebhook', rawBodyMiddleware, express.json(), xeroControllerRouter);
+// Remove rawBodyMiddleware - handled at app level now
+router.post('/', xeroControllerRouter);
 
 export default router;
 

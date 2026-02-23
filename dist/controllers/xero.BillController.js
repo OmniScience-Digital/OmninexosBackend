@@ -1,52 +1,93 @@
 import logger from "../utils/logger.js";
-import { verifyXeroWebhookSignature } from "../utils/xero.webhook.js";
+import crypto from "crypto";
 export const xeroControllerRouter = async (req, res) => {
+    // IMMEDIATE LOGGING - This should always show
+    console.log("\uD83D\uDE80 Xero webhook hit!"); // Direct console.log for immediate visibility
+    logger.info("Xero Bill Controller - START");
     try {
-        // Get the raw body - IMPORTANT: must be raw string, not parsed JSON
-        const rawBody = req.rawBody || JSON.stringify(req.body);
+        // Log headers for debugging
+        logger.debug("Headers:", JSON.stringify(req.headers));
+        // Get the raw body
+        const rawBody = req.rawBody;
+        // CRITICAL DEBUG: Log what we received
+        logger.info(`Raw body present: ${!!rawBody}`);
+        logger.info(`Content-Type: ${req.headers["content-type"]}`);
+        logger.info(`Content-Length: ${req.headers["content-length"]}`);
+        if (!rawBody) {
+            logger.error("No raw body captured! Check middleware configuration.");
+            // Still return 200 to acknowledge receipt
+            res.status(200).send("OK");
+            return;
+        }
         const signature = req.headers["x-xero-signature"];
         const webhookKey = process.env.XERO_WEBHOOK_KEY;
+        logger.info(`Signature present: ${!!signature}`);
+        logger.info(`Webhook key configured: ${!!webhookKey}`);
         if (!signature) {
             logger.warn("Missing Xero signature header");
-            return res.status(401).send("Unauthorized");
+            res.status(200).send("OK"); // Still return 200 to acknowledge
+            return;
         }
         if (!webhookKey) {
             logger.error("XERO_WEBHOOK_KEY not configured");
-            return res.status(500).send("Server configuration error");
+            res.status(200).send("OK");
+            return;
         }
         // Verify signature
         const isValid = verifyXeroWebhookSignature(rawBody, signature, webhookKey);
+        logger.info(`Signature valid: ${isValid}`);
         if (!isValid) {
             logger.warn("Invalid Xero webhook signature");
-            return res.status(401).send("Unauthorized");
+            res.status(200).send("OK");
+            return;
         }
-        // Signature valid - process webhook
-        logger.info("Xero Bill Webhook received and verified");
-        logger.info(JSON.stringify(req.body));
-        // IMPORTANT: Return 200 OK immediately, process asynchronously
+        // Parse body for logging
+        try {
+            const body = JSON.parse(rawBody);
+            logger.info("Webhook payload received:");
+            logger.info(`Events count: ${body.events?.length || 0}`);
+            // Process in background
+            processWebhookEvents(body);
+        }
+        catch (parseError) {
+            logger.error("Error parsing webhook body:", parseError);
+        }
+        // ALWAYS return 200 OK
         res.status(200).send("OK");
-        // Process the actual events in background (don't await)
-        processWebhookEvents(req.body);
     }
     catch (error) {
-        logger.error("Failed to process Xero Bill webhook:", error);
-        // Still return 200 to prevent Xero from retrying unnecessarily
-        // Log the error and handle internally
-        res.status(200).send("OK");
+        logger.error("Error in webhook handler:", error);
+        // Even on error, return 200
+        if (!res.headersSent) {
+            res.status(200).send("OK");
+        }
     }
 };
-// Separate async processing function
+const verifyXeroWebhookSignature = (payload, signature, webhookKey) => {
+    try {
+        const hmac = crypto.createHmac("sha256", webhookKey);
+        hmac.update(payload);
+        const computedSignature = hmac.digest("base64");
+        logger.debug(`Computed signature: ${computedSignature}`);
+        logger.debug(`Received signature: ${signature}`);
+        return crypto.timingSafeEqual(Buffer.from(computedSignature), Buffer.from(signature));
+    }
+    catch (error) {
+        logger.error("Signature verification error:", error);
+        return false;
+    }
+};
 async function processWebhookEvents(payload) {
     try {
-        // Process your events here
         if (payload.events) {
             for (const event of payload.events) {
-                logger.info(`Processing event: ${event.eventType} - ${event.eventCategory}`);
+                logger.info(`Processing: ${event.eventType} - ${event.resourceId}`);
                 // Add your business logic here
             }
         }
+        logger.info("Webhook processing complete");
     }
     catch (error) {
-        logger.error("Error processing webhook events:", error);
+        logger.error("Error processing events:", error);
     }
 }
