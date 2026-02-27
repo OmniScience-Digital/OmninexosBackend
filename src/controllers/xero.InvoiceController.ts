@@ -2,30 +2,14 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import fetch from 'node-fetch';
 import logger from '../utils/logger';
-import { getAccessToken } from '../services/xero.quote.service';
+import { getAccessToken } from '../helper/tokens/token.helper';
+import { Contact, XeroWebhookEvent, XeroWebhookPayload } from '../schema/xero.schema';
 
 /*
 |--------------------------------------------------------------------------
 | Types
 |--------------------------------------------------------------------------
 */
-
-export interface XeroWebhookEvent {
-  resourceUrl: string;
-  resourceId: string;
-  tenantId: string;
-  tenantType: 'ORGANISATION' | string;
-  eventCategory: 'INVOICE' | 'CONTACT' | 'SUBSCRIPTION' | string;
-  eventType: 'CREATE' | 'UPDATE' | 'DELETE';
-  eventDateUtc: string;
-}
-
-export interface XeroWebhookPayload {
-  events: XeroWebhookEvent[];
-  firstEventSequence: number;
-  lastEventSequence: number;
-  entropy: string;
-}
 
 // Xero API response types
 interface LineItem {
@@ -42,12 +26,6 @@ interface Invoice {
   Total: number;
   invoiceID: string;
   LineItems?: LineItem[];
-}
-
-interface Contact {
-  Name: string;
-  EmailAddress?: string;
-  ContactID: string;
 }
 
 interface Subscription {
@@ -222,10 +200,10 @@ async function handleContactEvent(event: XeroWebhookEvent) {
     const contact = data?.Contacts?.[0];
     if (!contact) return;
 
-    console.log('👤 Contact Name:', contact.Name);
-    console.log('Email:', contact.EmailAddress);
+    // console.log('👤 Contact Name:', contact.Name);
+    // console.log('Email:', contact.EmailAddress);
 
-    // 👉 Maintain contact updates in your DB here
+    console.log(data);
   } catch (err) {
     logger.error('Contact handler error:', err);
   }
@@ -244,10 +222,10 @@ async function handleSubscriptionEvent(event: XeroWebhookEvent) {
     const subscription = data?.Subscriptions?.[0];
     if (!subscription) return;
 
-    console.log('💳 Subscription Status:', subscription.Status);
-    console.log('Plan:', subscription.Plan?.Name);
+    // console.log('💳 Subscription Status:', subscription.Status);
+    // console.log('Plan:', subscription.Plan?.Name);
 
-    // 👉 Maintain subscription updates in your DB here
+    console.log(data);
   } catch (err) {
     logger.error('Subscription handler error:', err);
   }

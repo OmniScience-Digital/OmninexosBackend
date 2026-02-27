@@ -1,5 +1,5 @@
 import express from 'express';
-import { xeroController } from '../controllers/xero.controller';
+import { xeroController } from '../controllers/xero.Connect.controller';
 
 const router = express.Router();
 

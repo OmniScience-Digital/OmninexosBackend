@@ -49,3 +49,17 @@ logger.info('Dev Cron Loaded');
     logger.error('Runtime error:', error);
   }
 })();
+
+import { addQuoteJob } from '../../queues/quotes.queue';
+
+(async () => {
+  logger.info('🕒 Starting quote cron...');
+  await addQuoteJob();
+})();
+
+import { addPurchaseJob } from '../../queues/purchases.queue';
+
+(async () => {
+  logger.info('🕒 Starting purchase cron...');
+  await addPurchaseJob();
+})();

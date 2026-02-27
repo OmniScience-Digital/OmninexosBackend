@@ -6,8 +6,10 @@ import logger from "./utils/logger.js";
 import executiontime from "./middlewares/execution.middleware.js";
 import errorhandling from "./middlewares/errorhandling.middleware.js";
 import routes from "./routes/api.route.js";
+//workers for xero
+import "./workers/quotes.worker.js";
+import "./workers/purchases.worker.js";
 const PORT = Number(process.env.PORT) || 5001;
-const HOST = process.env.HOST || "localhost";
 const app = express();
 app.set("trust proxy", true);
 executiontime(app);

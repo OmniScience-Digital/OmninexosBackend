@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
 import 'dotenv/config';
 import cors from 'cors';
 import compression from 'compression';
@@ -7,8 +7,11 @@ import executiontime from './middlewares/execution.middleware';
 import errorhandling from './middlewares/errorhandling.middleware';
 import routes from './routes/api.route';
 
+//workers for xero
+import './workers/quotes.worker';
+import './workers/purchases.worker';
+
 const PORT = Number(process.env.PORT) || 5001;
-const HOST = process.env.HOST || 'localhost';
 
 const app = express();
 
@@ -16,7 +19,6 @@ app.set('trust proxy', true);
 executiontime(app);
 
 // **RAW body parser for Xero webhook - MUST match exact route path**
-
 app.use('/api/v1/xeroBillwebhook', express.raw({ type: '*/*', limit: '10mb' }));
 
 // JSON parser for all other routes

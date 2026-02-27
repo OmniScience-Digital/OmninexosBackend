@@ -1,5 +1,5 @@
 import express from "express";
-import { xeroController } from "../controllers/xero.controller.js";
+import { xeroController } from "../controllers/xero.Connect.controller.js";
 const router = express.Router();
 // OAuth routes
 router.get("/connect", xeroController.redirectToXero);

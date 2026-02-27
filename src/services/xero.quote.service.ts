@@ -1,95 +1,100 @@
 import fetch from 'node-fetch';
-import { client } from '../services/redis.service';
+import { getAccessToken } from '../helper/tokens/token.helper';
+import { Quote } from '../schema/xero.schema';
+import logger from '../utils/logger';
 
+let lastUpdatedDateUTC: string | null = null;
 const TENANT_ID = process.env.XERO_TENANT_ID!;
 
-interface XeroTokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  id_token?: string;
-  token_type?: string;
+interface XeroQuotesResponse {
+  Quotes: Quote[];
 }
 
-interface LineItem {
-  Description: string;
-  Quantity: number;
-  UnitAmount: number;
-  AccountCode: string;
-}
+export async function pollQuotes() {
+  try {
+    const ACCESS_TOKEN = await getAccessToken();
 
-interface QuoteData {
-  contactId: string;
-  reference: string;
-  date: string;
-  expiryDate: string;
-  lineItems: LineItem[];
-}
-
-// Get a fresh access token using the refresh token
-export async function getAccessToken(): Promise<string> {
-  // Get refresh token from Redis
-  const refreshToken = await client.get('xero:refresh_token');
-
-  if (!refreshToken) {
-    throw new Error('No refresh token found in Redis');
-  }
-
-  const params = new URLSearchParams();
-  params.append('grant_type', 'refresh_token');
-  params.append('refresh_token', refreshToken);
-  params.append('client_id', process.env.XERO_CLIENT_ID!);
-  params.append('client_secret', process.env.XERO_SECRET!);
-
-  const res = await fetch('https://identity.xero.com/connect/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
-
-  if (!res.ok) throw new Error(`Failed to refresh Xero token: ${res.statusText}`);
-
-  const data = (await res.json()) as XeroTokenResponse;
-
-  // Store the new refresh token in Redis
-  await client.set('xero:refresh_token', data.refresh_token);
-
-  return data.access_token;
-}
-
-// Create a quote in Xero
-export async function createXeroQuote(data: QuoteData) {
-  const ACCESS_TOKEN = await getAccessToken();
-
-  const body = {
-    Type: 'ACCREC',
-    Contact: { ContactID: data.contactId },
-    Reference: data.reference,
-    Date: data.date,
-    ExpiryDate: data.expiryDate,
-    LineItems: data.lineItems,
-  };
-
-  const res = await fetch('https://api.xero.com/api.xro/2.0/Quotes', {
-    method: 'POST',
-    headers: {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${ACCESS_TOKEN}`,
       'xero-tenant-id': TENANT_ID,
-      'Content-Type': 'application/json',
       Accept: 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+    };
 
-  const result = await res.json();
+    // if (lastUpdatedDateUTC) {
+    //   // Convert lastUpdatedDateUTC to SAST (UTC+2) for logging, header still in HTTP date format
+    //   const lastUpdatedSAST = new Date(lastUpdatedDateUTC);
+    //   lastUpdatedSAST.setHours(lastUpdatedSAST.getHours() + 2);
+    //   headers['If-Modified-Since'] = lastUpdatedSAST.toUTCString();
+    // }
+    if (lastUpdatedDateUTC) {
+      // Use UTC only for header; do NOT convert to SAST
+      headers['If-Modified-Since'] = new Date(lastUpdatedDateUTC).toUTCString();
+    }
 
-  console.log('Quote creation response:', JSON.stringify(result, null, 2));
-  return result;
+    let page = 1;
+    let allQuotes: Quote[] = [];
+
+    while (true) {
+      const url = `https://api.xero.com/api.xro/2.0/Quotes?order=UpdatedDateUTC DESC&page=${page}&pageSize=100`;
+
+      const res = await fetch(url, { method: 'GET', headers });
+
+      if (res.status === 304) {
+        console.log('No new or updated quotes.');
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(`Failed to fetch quotes: ${res.statusText}`);
+      }
+
+      const data = (await res.json()) as XeroQuotesResponse;
+
+      if (!data.Quotes || data.Quotes.length === 0) {
+        break;
+      }
+
+      allQuotes = allQuotes.concat(data.Quotes);
+
+      if (data.Quotes.length < 100) {
+        break;
+      }
+
+      page++;
+    }
+
+    if (allQuotes.length === 0) {
+      console.log('No quotes found.');
+      return;
+    }
+
+    logger.info(`✅ Total Quotes Retrieved: ${allQuotes.length}`);
+    logger.info('Last Sync Used:', lastUpdatedDateUTC);
+    logger.info('--------------------------------------------');
+
+    for (const quote of allQuotes) {
+      const rawTimestamp = quote.UpdatedDateUTC.replace(/\/Date\((\d+)\)\//, '$1');
+      const updatedISO = new Date(parseInt(rawTimestamp)).toISOString();
+
+      if (!lastUpdatedDateUTC || new Date(updatedISO) > new Date(lastUpdatedDateUTC)) {
+        // Log in SAST
+        const updatedSAST = new Date(updatedISO);
+        updatedSAST.setHours(updatedSAST.getHours() + 2);
+
+        console.log('Quote Number:', quote.QuoteNumber);
+        console.log('Status:', quote);
+        console.log('Updated At (SAST):', updatedSAST.toISOString());
+        console.log('--------------------------------------------');
+      }
+    }
+
+    // Update lastUpdatedDateUTC to newest record (keep in UTC for comparison)
+    const newest = allQuotes[0];
+    const newestRaw = newest.UpdatedDateUTC.replace(/\/Date\((\d+)\)\//, '$1');
+    lastUpdatedDateUTC = new Date(parseInt(newestRaw)).toISOString();
+
+    logger.info('🕒New Quote Order SyncTimestamp Stored:', lastUpdatedDateUTC);
+  } catch (err) {
+    console.error('❌ Error polling quotes:', err);
+  }
 }
-
-// To create a quote we need a contact
-
-// - A quote always belongs to a customer/contact.
-// - You either:
-//     1. Use an **existing contact** (like “Marine Systems”), or
-//     2. **Create a new contact via the Contacts API** and then use its `ContactID` in the quote creation.

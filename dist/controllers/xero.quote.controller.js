@@ -1,4 +1,4 @@
-import { createXeroQuote } from "../services/xero.quote.service.js";
+import { createXeroQuote } from "../services/xero.CreateQuote.service.js";
 export const xeroQuoteController = {
     createQuote: async (req, res) => {
         try {

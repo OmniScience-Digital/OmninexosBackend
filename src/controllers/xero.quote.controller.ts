@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { createXeroQuote } from '../services/xero.quote.service';
+import { createXeroQuote } from '../services/xero.CreateQuote.service';
 
 export const xeroQuoteController = {
   createQuote: async (req: Request, res: Response) => {
