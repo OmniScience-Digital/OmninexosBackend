@@ -230,3 +230,26 @@ async function handleSubscriptionEvent(event: XeroWebhookEvent) {
     logger.error('Subscription handler error:', err);
   }
 }
+
+// const fetch = require("node-fetch");
+// const fs = require("fs");
+
+// async function downloadInvoicePdf(invoiceId) {
+//   const response = await fetch(
+//     `https://api.xero.com/api.xro/2.0/Invoices/${invoiceId}/pdf`,
+//     {
+//       method: "GET",
+//       headers: {
+//         "Authorization": "Bearer YOUR_ACCESS_TOKEN",
+//         "Accept": "application/pdf",
+//         "xero-tenant-id": "YOUR_TENANT_ID"
+//       }
+//     }
+//   );
+
+//   const buffer = await response.buffer();
+//   fs.writeFileSync("invoice.pdf", buffer);
+//   console.log("Invoice saved as invoice.pdf");
+// }
+
+// downloadInvoicePdf("INVOICE_ID_HERE");

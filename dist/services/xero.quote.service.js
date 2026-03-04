@@ -11,12 +11,6 @@ export async function pollQuotes() {
             "xero-tenant-id": TENANT_ID,
             Accept: "application/json",
         };
-        // if (lastUpdatedDateUTC) {
-        //   // Convert lastUpdatedDateUTC to SAST (UTC+2) for logging, header still in HTTP date format
-        //   const lastUpdatedSAST = new Date(lastUpdatedDateUTC);
-        //   lastUpdatedSAST.setHours(lastUpdatedSAST.getHours() + 2);
-        //   headers['If-Modified-Since'] = lastUpdatedSAST.toUTCString();
-        // }
         if (lastUpdatedDateUTC) {
             // Use UTC only for header; do NOT convert to SAST
             headers["If-Modified-Since"] = new Date(lastUpdatedDateUTC).toUTCString();
