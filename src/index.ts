@@ -8,8 +8,8 @@ import errorhandling from './middlewares/errorhandling.middleware';
 import routes from './routes/api.route';
 
 //workers for xero
-import './workers/quotes.worker';
-import './workers/purchases.worker';
+// import './workers/quotes.worker';
+// import './workers/purchases.worker';
 
 const PORT = Number(process.env.PORT) || 5001;
 
