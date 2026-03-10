@@ -16,3 +16,11 @@ client.on("ready", () => console.log(`✅ Redis client ready at ${redisUrl}`));
         logger.error("\u274C Failed to connect to Redis:", err);
     }
 })();
+// k46srXVu35JEo41pim8SlSFUq89wV1gih66GDA7D2Wk
+// sudo docker exec -it 7dd4deb72f43 redis-cli
+// SET 'xero:refresh_token' "k46srXVu35JEo41pim8SlSFUq89wV1gih66GDA7D2Wk"
+// # Verify value
+// GET openTime
+// curl -v https://wq3qo9l3de.execute-api.us-east-1.amazonaws.com/api/v1/xeroBillwebhook
+//https://wq3qo9l3de.execute-api.us-east-1.amazonaws.com/api/v1/xeroBillwebhook
+//http://172.31.81.3:5001/api/v1/xeroBillwebhook

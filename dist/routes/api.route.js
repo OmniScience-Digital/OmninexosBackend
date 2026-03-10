@@ -6,10 +6,12 @@ import clickupVifApi from "./vif.route.js";
 import xeroApi from "./xero.auth.route.js";
 import xeroQuoteApi from "./xero.quote.route.js";
 import xeroBillApi from "./xero.bill.route.js";
+import server from "./server.route.js";
 routes.use("/api/v1", xeroBillApi); // Most specific first
 routes.use("/api/v1", stockControllerApi);
 routes.use("/api/v1", clickupApi);
 routes.use("/api/v1", clickupVifApi);
 routes.use("/api/v1/xero", xeroApi);
 routes.use("/api/v1/xero", xeroQuoteApi);
+routes.use("/", server);
 export default routes;
