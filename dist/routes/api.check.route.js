@@ -2,12 +2,12 @@ import express from 'express';
 const router = express.Router();
 router.get('/', (req, res) => {
     res.json({
-        status: "ok",
-        message: "API reachable",
+        status: 'ok',
+        message: 'API reachable',
         uptime_seconds: process.uptime(),
         memory_usage: process.memoryUsage(),
         node_version: process.version,
-        timestamp: new Date()
+        timestamp: new Date(),
     });
 });
 export default router;

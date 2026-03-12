@@ -2,8 +2,8 @@ import fetch from 'node-fetch';
 import { getAccessToken } from '../helper/tokens/token.helper';
 import { Quote } from '../schema/xero.schema';
 import logger from '../utils/logger';
+import { getXeroConfig, updateXeroConfig } from '../repositories/dynamo.xeroconfig.repository';
 
-let lastUpdatedDateUTC: string | null = null;
 const TENANT_ID = process.env.XERO_TENANT_ID!;
 
 interface XeroQuotesResponse {
@@ -12,16 +12,20 @@ interface XeroQuotesResponse {
 
 export async function pollQuotes() {
   try {
+    const config = await getXeroConfig(TENANT_ID);
+
+    let lastUpdatedDateUTC: string | null = config?.quotesLastSyncUTC?.S ?? null;
+
     const ACCESS_TOKEN = await getAccessToken();
+
+    console.log('ACCESS_TOKEN ', ACCESS_TOKEN);
 
     const headers: Record<string, string> = {
       Authorization: `Bearer ${ACCESS_TOKEN}`,
       'xero-tenant-id': TENANT_ID,
       Accept: 'application/json',
     };
-
     if (lastUpdatedDateUTC) {
-      // Use UTC only for header; do NOT convert to SAST
       headers['If-Modified-Since'] = new Date(lastUpdatedDateUTC).toUTCString();
     }
 
@@ -85,7 +89,11 @@ export async function pollQuotes() {
     // Update lastUpdatedDateUTC to newest record (keep in UTC for comparison)
     const newest = allQuotes[0];
     const newestRaw = newest.UpdatedDateUTC.replace(/\/Date\((\d+)\)\//, '$1');
-    lastUpdatedDateUTC = new Date(parseInt(newestRaw)).toISOString();
+    const newestSync = new Date(parseInt(newestRaw)).toISOString();
+
+    await updateXeroConfig(TENANT_ID, {
+      quotesLastSyncUTC: newestSync,
+    });
 
     logger.info('🕒New Quote Order SyncTimestamp Stored:', lastUpdatedDateUTC);
   } catch (err) {

@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import logger from '../utils/logger';
 import xeroService from '../services/xero.service';
+import { encrypt } from '../services/encryption.service';
+import { updateXeroConfig } from '../repositories/dynamo.xeroconfig.repository';
 
 export const xeroController = {
   // GET /connect → redirects user to Xero login
@@ -25,27 +27,40 @@ export const xeroController = {
         res.status(400).json({ success: false, error: 'Authorization code missing' });
         return;
       }
-
       logger.info('Received Xero callback, exchanging code for tokens');
+
+      // Exchange code for access + refresh tokens
       const tokens = await xeroService.exchangeCodeForToken(code);
 
-      logger.info('Xero tokens received', {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+      // Fetch Xero tenants
+      const tenants = await xeroService.getTenants(tokens.access_token);
+
+      if (!tenants || tenants.length === 0) {
+        throw new Error('No Xero tenants returned');
+      }
+      // Encrypt the refresh token before saving
+      const encryptedRefreshToken = encrypt(tokens.refresh_token);
+
+      //  Save encrypted refresh token + initial sync timestamps in DynamoDB
+      await updateXeroConfig(tenants[0].tenantId, {
+        refreshTokenEncrypted: encryptedRefreshToken,
       });
 
-      const tenants = await xeroService.getTenants(tokens.access_token);
-      logger.info('Xero tenants fetched', tenants);
-
-      res.status(200).json({ success: true, message: 'Xero connected!', tokens, tenants });
+      // Respond to client
+      res.status(200).json({
+        success: true,
+        message: 'Xero connected!',
+        tokens,
+        tenants,
+      });
     } catch (error) {
       logger.error('Error handling Xero callback', error);
-      res
-        .status(500)
-        .json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   },
-
   fetchBills: async (req: Request, res: Response): Promise<void> => {
     try {
       // In a real app, you’d store these tokens after callback
