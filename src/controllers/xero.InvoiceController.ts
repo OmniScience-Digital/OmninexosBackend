@@ -203,7 +203,7 @@ async function handleContactEvent(event: XeroWebhookEvent) {
     // console.log('👤 Contact Name:', contact.Name);
     // console.log('Email:', contact.EmailAddress);
 
-    console.log(data);
+    // console.log(data);
   } catch (err) {
     logger.error('Contact handler error:', err);
   }
@@ -225,7 +225,7 @@ async function handleSubscriptionEvent(event: XeroWebhookEvent) {
     // console.log('💳 Subscription Status:', subscription.Status);
     // console.log('Plan:', subscription.Plan?.Name);
 
-    console.log(data);
+    // console.log(data);
   } catch (err) {
     logger.error('Subscription handler error:', err);
   }

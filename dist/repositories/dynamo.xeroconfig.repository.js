@@ -2,6 +2,7 @@ import "dotenv/config";
 import { UpdateItemCommand, PutItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { dynamoClient } from "../services/dynamo.service.js";
+import logger from "../utils/logger.js";
 const CONFIG_TABLE = process.env.XERO_CONFIG_TABLE;
 export const getXeroConfig = async (tenantId) => {
     const result = await dynamoClient.send(new QueryCommand({
@@ -17,7 +18,6 @@ export const getXeroConfig = async (tenantId) => {
     return unmarshall(result.Items[0]);
 };
 export const updateXeroConfig = async (tenantId, updates) => {
-    console.log("inside updateXeroConfig", tenantId, updates);
     // --- Query by secondary index to check existence ---
     const existingQuery = await dynamoClient.send(new QueryCommand({
         TableName: CONFIG_TABLE,
@@ -29,7 +29,7 @@ export const updateXeroConfig = async (tenantId, updates) => {
     const oldEpoch = new Date("1963-01-01T00:00:00.000Z").toISOString();
     // --- Insert if missing ---
     if (existingQuery.Count === 0) {
-        console.log("No existing record, creating one...");
+        logger.info("No existing record, creating one...");
         const now = new Date().toISOString();
         const newItem = {
             id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,

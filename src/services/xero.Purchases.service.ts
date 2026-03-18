@@ -14,7 +14,7 @@ export async function pollPurchases() {
   try {
     const config = await getXeroConfig(TENANT_ID);
 
-    let lastUpdatedDateUTC: string | null = config?.purchasesLastSyncUTC?.S ?? null;
+    let lastUpdatedDateUTC: string | null = config?.purchasesLastSyncUTC ?? null;
 
     const ACCESS_TOKEN = await getAccessToken();
 
@@ -83,7 +83,7 @@ export async function pollPurchases() {
         updatedSAST.setHours(updatedSAST.getHours() + 2);
 
         console.log('Purchase Order Number:', purchase.PurchaseOrderNumber);
-        console.log('Status:', purchase);
+        console.log(purchase);
         console.log('Updated At (SAST):', updatedSAST.toISOString());
         console.log('--------------------------------------------');
       }

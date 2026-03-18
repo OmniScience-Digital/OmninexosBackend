@@ -3,14 +3,12 @@ import { getAccessToken } from '../helper/tokens/token.helper';
 import { Quote } from '../schema/xero.schema';
 import logger from '../utils/logger';
 import { getXeroConfig, updateXeroConfig } from '../repositories/dynamo.xeroconfig.repository';
-import {
-  createQuote,
-  updateQuote,
-  getQuoteByNumber,
-} from '../repositories/dynamo.quote.repository';
+import { createQuote, updateQuote, getQuoteByNumber } from '../repositories/dynamo.quote.repository';
+
 
 const TENANT_ID = process.env.XERO_TENANT_ID!;
 const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
+
 
 interface XeroQuotesResponse {
   Quotes: Quote[];
@@ -137,7 +135,10 @@ export async function handleQuoteStatuses(quote: Quote) {
           break;
       }
     } else if (lineItemsChanged || totalsChanged) {
-      quoteAction = existingQuote.quoteStatus === 'SENT' ? 'Revision After Sent' : 'Updated';
+      quoteAction =
+        existingQuote.quoteStatus === 'SENT'
+          ? 'Revision After Sent'
+          : 'Updated';
     } else {
       logger.info(`No changes for quote ${quote.QuoteNumber}`);
       return;
@@ -171,6 +172,7 @@ export async function handleQuoteStatuses(quote: Quote) {
     await handleQuoteTasks(updates, quoteAction, existingQuote);
 
     await updateQuote(existingQuote.id, updates);
+
   } else {
     //  NEW QUOTE
     const newItem: any = {
@@ -188,7 +190,7 @@ export async function handleQuoteStatuses(quote: Quote) {
       subTotal: quote.SubTotal || 0,
       taxTotal: quote.TotalTax || 0,
       quTotal: quote.Total || 0,
-      quoteAction: 'Created',
+      quoteAction: "Created",
       clickUpTaskidCrm1: '',
       clickUpTaskidCrm2: '',
       clickUpTaskidCrm5: '',
@@ -314,88 +316,17 @@ async function updateClickUpTaskStatus(taskId: string, status: string) {
   logger.info(`Updated ClickUp task ${taskId} status to ${status}`);
 }
 
-// function buildClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
-//   let topic = "";
-//   let listid = "";
-//   let status = "";
-
-//   // Map CRM to appropriate list ID
-//   switch (crm) {
-//     case 'CRM1':
-//       listid = process.env.CRM1_LIST_ID!;
-//       topic = `${action} ${quote.quoteNumber} CRM-01 Task`;
-//       status = (action.toLowerCase() === 'sent') ? 'complete' : 'to do';
-//       break;
-//     case 'CRM2':
-//       listid = process.env.CRM2_LIST_ID!;
-//       topic = `${action} ${quote.quoteNumber} CRM-02 Task`;
-//       status = 'to do';
-//       break;
-//     case 'CRM5':
-//       listid = process.env.CRM5_LIST_ID!;
-//       topic = `${action} ${quote.quoteNumber} CRM-05 Task`;
-//       status = 'to do';
-//       break;
-//     case 'CRM7':
-//       listid = process.env.CRM7_LIST_ID!;
-//       topic = `${action} ${quote.quoteNumber} CRM-07 Task`;
-//       status = 'to do';
-//       break;
-//     case 'CRM9':
-//       listid = process.env.CRM9_LIST_ID!;
-//       topic = `${action} ${quote.quoteNumber} CRM-09 Task`;
-//       status = 'to do';
-//       break;
-//   }
-
-//   const quoteItemsText = (quote.lineItems || [])
-//     .map((item: any, i: number) => {
-//       const taxRate =
-//         item.LineAmount
-//           ? ((item.TaxAmount / item.LineAmount) * 100).toFixed(2)
-//           : "0.00";
-
-//       return `Item Desc ${i + 1}:
-// - ${item.Description}
-// Item Qty: ${item.Quantity}
-// Item Unit: ${item.UnitAmount}
-// Total: ${item.LineAmount}
-// Tax Rate: ${taxRate}%`;
-//     })
-//     .join("\n\n");
-
-//   // Build Xero link
-//   const viewOrEdit = quote.quoteStatus === 'DRAFT' ? 'edit' : 'view';
-//   const quoteUrl = `https://go.xero.com/app/!R986L/quotes/${viewOrEdit}/${quote.quoteId}`;
-
-//   const description = `
-// Quote: ${quote.quoteNumber}
-// Customer: ${quote.customerName}
-// Quote Status: ${quote.quoteStatus}
-// Quote Expiry: ${quote.quoteExpireyDate}
-// Quote Link: ${quoteUrl}
-// Action By User: ${action}
-
-// Items:
-// ${quoteItemsText}
-
-// Total: ${quote.quTotal} ${quote.currencyCode}
-// `;
-
-//   return { topic, listid, description, status };
-// }
-
 function buildClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
-  let topic = '';
-  let listid = '';
-  let status = '';
+  let topic = "";
+  let listid = "";
+  let status = "";
 
-  // Map CRM to appropriate list ID and build topic
+  // Map CRM to appropriate list ID
   switch (crm) {
     case 'CRM1':
       listid = process.env.CRM1_LIST_ID!;
       topic = `${action} ${quote.quoteNumber} CRM-01 Task`;
-      status = action.toLowerCase() === 'sent' ? 'complete' : 'to do';
+      status = (action.toLowerCase() === 'sent') ? 'complete' : 'to do';
       break;
     case 'CRM2':
       listid = process.env.CRM2_LIST_ID!;
@@ -419,58 +350,38 @@ function buildClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
       break;
   }
 
-  // Build quote items exactly as in original handleXeroClickUp
   const quoteItemsText = (quote.lineItems || [])
-    .map((item: any, index: number) => {
+    .map((item: any, i: number) => {
       const taxRate =
-        item.LineAmount && item.LineAmount !== 0
+        item.LineAmount
           ? ((item.TaxAmount / item.LineAmount) * 100).toFixed(2)
-          : '0.00';
+          : "0.00";
 
-      return `Item ${index + 1}:
-    - Item Description: ${item.Description}
-    - Item Quantity: ${item.Quantity}
-    - Item Unit Cost: ${item.UnitAmount}
-    - Account Code: ${item.AccountCode || 'N/A'}
-    - Line Total: ${item.LineAmount}
-    - Tax Rate: ${taxRate}%`;
+      return `Item Desc ${i + 1}:
+- ${item.Description}
+Item Qty: ${item.Quantity}
+Item Unit: ${item.UnitAmount}
+Total: ${item.LineAmount}
+Tax Rate: ${taxRate}%`;
     })
-    .join('\n\n');
-
-  // Build totals section (original format)
-  const totalsText = `
-Quote Currency: ${quote.currencyCode}
-Quote Subtotal: ${quote.subTotal}
-Quote Discount: ${quote.totalDiscount || 0}
-Quote Tax: ${quote.taxTotal}
-Quote Total: ${quote.quTotal}
-`;
+    .join("\n\n");
 
   // Build Xero link
   const viewOrEdit = quote.quoteStatus === 'DRAFT' ? 'edit' : 'view';
   const quoteUrl = `https://go.xero.com/app/!R986L/quotes/${viewOrEdit}/${quote.quoteId}`;
 
-  // Final description – exactly matching original structure plus link and action
   const description = `
-Name - ${quote.quoteNumber}
+Quote: ${quote.quoteNumber}
+Customer: ${quote.customerName}
+Quote Status: ${quote.quoteStatus}
+Quote Expiry: ${quote.quoteExpireyDate}
+Quote Link: ${quoteUrl}
+Action By User: ${action}
 
-Custom Fields:
-Customer - ${quote.customerName}
-Due Date - ${quote.quoteExpireyDate}
-Business Unit - --------
-
-Description:
-Scope of Work - ${quote.quoteNumber}
-Quote Status - ${quote.quoteStatus}
-Quote Action - ${action}
-Quote Expiry - ${quote.quoteExpireyDate}
-
-Quote Link - ${quoteUrl}
-
-Quote Items:
+Items:
 ${quoteItemsText}
 
-${totalsText}
+Total: ${quote.quTotal} ${quote.currencyCode}
 `;
 
   return { topic, listid, description, status };
@@ -526,5 +437,5 @@ async function createClickUpTask(
     throw new Error(await res.text());
   }
 
-  return (await res.json()) as ClickUpTaskResponse;
+  return await res.json() as ClickUpTaskResponse;
 }

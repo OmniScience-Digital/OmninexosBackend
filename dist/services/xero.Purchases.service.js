@@ -6,7 +6,7 @@ const TENANT_ID = process.env.XERO_TENANT_ID;
 export async function pollPurchases() {
     try {
         const config = await getXeroConfig(TENANT_ID);
-        let lastUpdatedDateUTC = config?.purchasesLastSyncUTC?.S ?? null;
+        let lastUpdatedDateUTC = config?.purchasesLastSyncUTC ?? null;
         const ACCESS_TOKEN = await getAccessToken();
         const headers = {
             Authorization: `Bearer ${ACCESS_TOKEN}`,
@@ -58,7 +58,7 @@ export async function pollPurchases() {
                 const updatedSAST = new Date(updatedISO);
                 updatedSAST.setHours(updatedSAST.getHours() + 2);
                 console.log("Purchase Order Number:", purchase.PurchaseOrderNumber);
-                console.log("Status:", purchase);
+                console.log(purchase);
                 console.log("Updated At (SAST):", updatedSAST.toISOString());
                 console.log("--------------------------------------------");
             }
@@ -68,7 +68,7 @@ export async function pollPurchases() {
         if (newestMatch) {
             const newestSync = new Date(parseInt(newestMatch[1])).toISOString();
             await updateXeroConfig(TENANT_ID, {
-                purchasesLastSyncUTC: newestSync
+                purchasesLastSyncUTC: newestSync,
             });
             logger.info(" New Purchase Order Sync Timestamp Stored:", lastUpdatedDateUTC);
         }

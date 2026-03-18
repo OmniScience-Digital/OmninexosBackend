@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { UpdateItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { dynamoClient } from '../services/dynamo.service';
+import logger from '../utils/logger';
 
 const CONFIG_TABLE = process.env.XERO_CONFIG_TABLE!;
 
@@ -32,8 +32,6 @@ export const updateXeroConfig = async (
     refreshTokenEncrypted?: string;
   }
 ) => {
-  console.log('inside updateXeroConfig', tenantId, updates);
-
   // --- Query by secondary index to check existence ---
   const existingQuery = await dynamoClient.send(
     new QueryCommand({
@@ -49,7 +47,7 @@ export const updateXeroConfig = async (
 
   // --- Insert if missing ---
   if (existingQuery.Count === 0) {
-    console.log('No existing record, creating one...');
+    logger.info('No existing record, creating one...');
     const now = new Date().toISOString();
     const newItem: any = {
       id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,

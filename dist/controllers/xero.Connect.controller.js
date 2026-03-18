@@ -37,7 +37,7 @@ export const xeroController = {
             const encryptedRefreshToken = encrypt(tokens.refresh_token);
             //  Save encrypted refresh token + initial sync timestamps in DynamoDB
             await updateXeroConfig(tenants[0].tenantId, {
-                refreshTokenEncrypted: encryptedRefreshToken
+                refreshTokenEncrypted: encryptedRefreshToken,
             });
             // Respond to client
             res.status(200).json({

@@ -8,7 +8,7 @@ import errorhandling from "./middlewares/errorhandling.middleware.js";
 import routes from "./routes/api.route.js";
 //workers for xero
 import "./workers/quotes.worker.js";
-import "./workers/purchases.worker.js";
+//import './workers/purchases.worker';
 const PORT = Number(process.env.PORT) || 5001;
 const app = express();
 app.set("trust proxy", true);
