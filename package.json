@@ -22,6 +22,7 @@
       "@types/compression": "^1.8.1",
       "@types/node-fetch": "^2.6.13",
       "aws-sdk": "^1.18.0",
+      "axios": "^1.13.6",
       "bullmq": "^5.70.1",
       "compression": "^1.8.1",
       "config": "^4.1.1",

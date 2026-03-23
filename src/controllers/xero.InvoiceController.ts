@@ -165,7 +165,7 @@ async function handleInvoiceEvent(event: XeroWebhookEvent) {
     const invoice = data?.Invoices?.[0];
     if (!invoice) return;
 
-    console.log(invoice);
+    console.log(JSON.stringify(invoice));
 
     console.log('📄 Invoice:', invoice.InvoiceNumber);
     console.log('📄 Invoice Id:', invoice.invoiceID);

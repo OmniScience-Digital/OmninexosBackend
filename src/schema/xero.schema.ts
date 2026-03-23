@@ -36,6 +36,7 @@ export interface Quote {
   CurrencyCode?: string;
   SubTotal?: number;
   Total?: number;
+  Title?: string;
   TotalDiscount?: number;
   TotalTax?: number;
   BrandingThemeID?: string;

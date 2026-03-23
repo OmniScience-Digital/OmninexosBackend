@@ -103,7 +103,7 @@ async function handleInvoiceEvent(event) {
         const invoice = data?.Invoices?.[0];
         if (!invoice)
             return;
-        console.log(invoice);
+        console.log(JSON.stringify(invoice));
         console.log("\uD83D\uDCC4 Invoice:", invoice.InvoiceNumber);
         console.log("\uD83D\uDCC4 Invoice Id:", invoice.invoiceID);
         console.log("Status:", invoice.Status);
