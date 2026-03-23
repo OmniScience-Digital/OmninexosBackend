@@ -163,6 +163,7 @@ export async function handleQuoteStatuses(quote: Quote) {
       taxTotal: quote.TotalTax,
       quTotal: quote.Total,
       title: quote.Title,
+      PoNumber: existingQuote.PoNumber,
       quoteAction,
       businessUnitvalueid: existingQuote.businessUnitvalueid,
       businessUnitvalue: existingQuote.businessUnitvalue,
@@ -192,6 +193,7 @@ export async function handleQuoteStatuses(quote: Quote) {
       quoteIssueDate,
       quoteExpireyDate,
       title: quote.Title,
+      PoNumber: '',
       quoteStatus: quote.Status || '',
       currencyCode: quote.CurrencyCode || '',
       lineItems: quote.LineItems || [],
@@ -266,6 +268,10 @@ async function handleQuoteTasks(quote: any, action: string, existingQuote: any |
       // Update task in CRM 2 (pass CRM2 to updateClickUpTask)
       if (quote.clickUpTaskidCrm2) {
         const taskid = await updateClickUpTask(quote.clickUpTaskidCrm2, quote, action, 'CRM2');
+        await addClickUpComment(
+          quote.clickUpTaskidCrm2,
+          '@sales please upload PO and select Process'
+        );
       }
 
       // Create task in CRM 5 if not exists
@@ -596,6 +602,7 @@ function getRelatedTasksSection(quote: any, crm: string): string {
 }
 
 async function addClickUpComment(taskId: string, commentText: string) {
+  if (!commentText) return;
   const res = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/comment`, {
     method: 'POST',
     headers: {

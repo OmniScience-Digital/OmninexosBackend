@@ -122,6 +122,7 @@ export async function handleQuoteStatuses(quote) {
             taxTotal: quote.TotalTax,
             quTotal: quote.Total,
             title: quote.Title,
+            PoNumber: existingQuote.PoNumber,
             quoteAction,
             businessUnitvalueid: existingQuote.businessUnitvalueid,
             businessUnitvalue: existingQuote.businessUnitvalue,
@@ -150,6 +151,7 @@ export async function handleQuoteStatuses(quote) {
             quoteIssueDate,
             quoteExpireyDate,
             title: quote.Title,
+            PoNumber: "",
             quoteStatus: quote.Status || "",
             currencyCode: quote.CurrencyCode || "",
             lineItems: quote.LineItems || [],
@@ -216,6 +218,7 @@ async function handleQuoteTasks(quote, action, existingQuote) {
             // Update task in CRM 2 (pass CRM2 to updateClickUpTask)
             if (quote.clickUpTaskidCrm2) {
                 const taskid = await updateClickUpTask(quote.clickUpTaskidCrm2, quote, action, "CRM2");
+                await addClickUpComment(quote.clickUpTaskidCrm2, "@sales please upload PO and select Process");
             }
             // Create task in CRM 5 if not exists
             if (!quote.clickUpTaskidCrm5) {
@@ -339,9 +342,7 @@ ${totalsText}
         // Remove any potential extra blank lines
         description = baseDescription.replace(/\n\n\n+/g, "\n\n");
         // Custom fields for CRM1
-        customFields = [
-            { id: CUSTOMER_FIELD_ID, value: quote.customerName }
-        ];
+        customFields = [{ id: CUSTOMER_FIELD_ID, value: quote.customerName }];
         if (action === "Created") {
             comment = "Quote Created.";
         }
@@ -353,9 +354,7 @@ ${totalsText}
         due_date = new Date(quote.quoteExpireyDate).getTime();
         listid = process.env.CRM2_LIST_ID;
         status = "to do";
-        customFields = [
-            { id: CUSTOMER_FIELD_ID, value: quote.customerName }
-        ];
+        customFields = [{ id: CUSTOMER_FIELD_ID, value: quote.customerName }];
         description = `${relatedTasksSection}
 Description:
 Scope of Work - ${quote.quoteNumber}
@@ -378,7 +377,7 @@ ${totalsText}
         status = "to do";
         customFields = [
             { id: CUSTOMER_FIELD_ID, value: quote.customerName },
-            { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid }
+            { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
         ];
         description = `${relatedTasksSection}
 Description:
@@ -395,7 +394,7 @@ ${quoteItemsText}
         status = "to do";
         customFields = [
             { id: CUSTOMER_FIELD_ID, value: quote.customerName },
-            { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid }
+            { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
         ];
         description = `${relatedTasksSection}
 Description:
@@ -468,7 +467,7 @@ async function createClickUpTask(description, topic, listId, status, customField
             description,
             status: status,
             due_date: due_date,
-            custom_fields: customFields
+            custom_fields: customFields,
         }),
     });
     if (!res.ok) {
@@ -513,6 +512,8 @@ function getRelatedTasksSection(quote, crm) {
     return `**Related Tasks**\n${links.join("\n")}\n\n`;
 }
 async function addClickUpComment(taskId, commentText) {
+    if (!commentText)
+        return;
     const res = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/comment`, {
         method: "POST",
         headers: {
