@@ -103,11 +103,25 @@ async function handleInvoiceEvent(event) {
         const invoice = data?.Invoices?.[0];
         if (!invoice)
             return;
-        console.log(JSON.stringify(invoice));
-        console.log("\uD83D\uDCC4 Invoice:", invoice.InvoiceNumber);
-        console.log("\uD83D\uDCC4 Invoice Id:", invoice.invoiceID);
-        console.log("Status:", invoice.Status);
-        console.log("Total:", invoice.Total);
+        const status = invoice.Status;
+        const amountPaid = invoice.AmountPaid || 0;
+        const amountDue = invoice.AmountDue || 0;
+        if (status === "DRAFT") {
+            console.log("\uD83D\uDFE1 CREATE INVOICE (DRAFT)");
+            console.log("InvoiceNumber:", invoice.InvoiceNumber);
+        }
+        else if (status === "AUTHORISED" && amountPaid === 0) {
+            console.log("\uD83D\uDFE2 APPROVED INVOICE");
+            console.log("InvoiceNumber:", invoice.InvoiceNumber);
+            console.log("DueDate:", invoice.DueDateString);
+        }
+        else if (amountPaid > 0) {
+            console.log("\uD83D\uDCB0 PAYMENT RECORDED");
+            console.log("InvoiceNumber:", invoice.InvoiceNumber);
+            console.log("AmountPaid:", amountPaid);
+            console.log("AmountDue:", amountDue);
+        }
+        // Line items (keep yours)
         const lineItems = invoice.LineItems || [];
         for (const item of lineItems) {
             console.log("---- LINE ITEM ----");
@@ -117,7 +131,6 @@ async function handleInvoiceEvent(event) {
             console.log("AccountCode:", item.AccountCode);
             console.log("LineAmount:", item.LineAmount);
         }
-        // 👉 Maintain update in your DB here
     }
     catch (err) {
         console.error("Invoice handler error:", err);

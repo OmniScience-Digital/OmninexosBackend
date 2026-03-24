@@ -3,7 +3,7 @@ import logger from "../utils/logger.js";
 export const stockControllerRouter = async (req, res) => {
     try {
         logger.info("Executing stock control route.");
-        console.log(JSON.stringify(req.body, null, 2));
+        // console.log(JSON.stringify(req.body, null, 2));
         const payload = parseClickUpPayload(req.body);
         await updateComponents(payload);
         res.status(200).json({ success: true, message: "Report Generated" });

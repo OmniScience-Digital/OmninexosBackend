@@ -1,7 +1,7 @@
 import logger from "../utils/logger.js";
 import { getClickUpTask } from "../services/clickUpfetch.service.js";
 import { getQuoteByNumber, updateQuote } from "../repositories/dynamo.quote.repository.js";
-import { updateClickUpTaskStatus, uploadAttachmentToClickUpTask } from "../services/xero.quote.service.js";
+import { updateClickUpTaskStatus, uploadAttachmentToClickUpTask, } from "../services/xero.quote.service.js";
 export const BUSINESS_UNIT_FIELD_ID = "fdf29394-d070-4384-863c-9f2f5885061f";
 export const PURCHASE_ORDER_NUMBER_FIELD_ID = "7830276e-f1bb-4efc-8e87-e34693cbd712";
 export const xeroPOController = {
@@ -127,7 +127,42 @@ export const xeroPOController = {
                 error: error.message || "Unknown error",
             });
         }
-    }
+    },
+    invUpdate: async (req, res) => {
+        try {
+            const taskId = parseInspectionClickUpPayload(req.body);
+            // Fetch the target ClickUp task (where POD should be attached)
+            const targetTask = await getClickUpTask(taskId);
+            // Extract Quote Name from task description or text_content
+            const quoteName = extractQuoteName(targetTask);
+            if (!quoteName) {
+                return res.status(400).json({
+                    success: false,
+                    error: "Quote number not found in task description",
+                });
+            }
+            // Pull the existing quote from the database
+            const existingQuote = await getQuoteByNumber(quoteName);
+            if (!existingQuote) {
+                return res.status(404).json({
+                    success: false,
+                    error: "Quote not found in the database",
+                });
+            }
+            console.log(JSON.stringify(targetTask));
+            console.log(JSON.stringify(quoteName));
+            return res.status(200).json({
+                success: true,
+            });
+        }
+        catch (error) {
+            console.error("Error updating POD attachments:", error);
+            return res.status(500).json({
+                success: false,
+                error: error.message || "Unknown error",
+            });
+        }
+    },
 };
 // Parse task ID from webhook payload
 function parseInspectionClickUpPayload(clickupPayload) {
