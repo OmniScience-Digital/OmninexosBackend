@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import FormData from 'form-data';
 import { getAccessToken } from '../helper/tokens/token.helper';
 import { Quote } from '../schema/xero.schema';
 import logger from '../utils/logger';
@@ -8,6 +9,7 @@ import {
   updateQuote,
   getQuoteByNumber,
 } from '../repositories/dynamo.quote.repository';
+import telegramService from './telegram.service';
 
 const TENANT_ID = process.env.XERO_TENANT_ID!;
 const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
@@ -244,7 +246,7 @@ async function handleQuoteTasks(quote: any, action: string, existingQuote: any |
 
       // Mark CRM 1 task with the status from buildClickUpPayload
       if (quote.clickUpTaskidCrm1) {
-        const { status } = buildClickUpPayload(action, quote, 'CRM1');
+        const { status } = await buildClickUpPayload(action, quote, 'CRM1');
         await updateClickUpTaskStatus(quote.clickUpTaskidCrm1, status);
         // Add comment
         await addClickUpComment(quote.clickUpTaskidCrm1, 'Quote updated and sent');
@@ -308,8 +310,8 @@ async function handleQuoteTasks(quote: any, action: string, existingQuote: any |
   }
 }
 async function createClickUpTaskForCRM(crm: string, action: string, quote: any): Promise<any> {
-  const { topic, listid, description, status, customFields, comment, due_date } =
-    buildClickUpPayload(action, quote, crm);
+  const { topic, listid, description, status, customFields, comment, due_date, quoteUrl } =
+    await buildClickUpPayload(action, quote, crm);
 
   const task = await createClickUpTask(description, topic, listid, status, customFields, due_date);
 
@@ -320,11 +322,16 @@ async function createClickUpTaskForCRM(crm: string, action: string, quote: any):
 
   await addClickUpComment(task.id, comment);
 
+  if (action === 'Sent') {
+    let crm01_message = `Task moved to CRM-02\nhttps://app.clickup.com/t/${quote.clickUpTaskidCrm2}`;
+    await addClickUpComment(quote.clickUpTaskidCrm1, crm01_message);
+  }
+
   logger.info(`Created task ${task.id} for ${quote.quoteNumber} in ${crm}`);
   return task;
 }
 
-async function updateClickUpTaskStatus(taskId: string, status: string) {
+export async function updateClickUpTaskStatus(taskId: string, status: string) {
   const url = `https://api.clickup.com/api/v2/task/${taskId}`;
 
   const res = await fetch(url, {
@@ -347,19 +354,28 @@ async function updateClickUpTaskStatus(taskId: string, status: string) {
   logger.info(`Updated ClickUp task ${taskId} status to ${status}`);
 }
 
-function buildClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
+export async function buildClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
   let topic = `${quote.quoteNumber} ,${quote.customerName} ,${quote.title}`;
 
-  const { listid, status, description, customFields, comment, due_date } = constructClickUpPayload(
-    action,
-    quote,
-    crm
-  );
+  const { listid, status, description, customFields, comment, due_date, quoteUrl } =
+    await constructClickUpPayload(action, quote, crm);
 
-  return { topic, listid, description, status, customFields, comment, due_date };
+  return { topic, listid, description, status, customFields, comment, due_date, quoteUrl };
 }
 
-function constructClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
+async function constructClickUpPayload(
+  action: string,
+  quote: any,
+  crm: string = 'CRM1'
+): Promise<{
+  listid: string;
+  status: string;
+  description: string;
+  customFields: any[];
+  comment: string;
+  due_date: number;
+  quoteUrl: string;
+}> {
   let listid = '';
   let status = '';
   // Build quote items (used by some cases)
@@ -395,6 +411,14 @@ Quote Total: ${quote.quTotal}
   let comment = '';
   let due_date = 0;
   let customFields: any[] = [];
+
+  let chatId: string;
+
+  if (process.env.NODE_ENV === 'development') {
+    chatId = process.env.chartIDTest || '';
+  } else {
+    chatId = '';
+  }
 
   if (crm === 'CRM1') {
     listid = process.env.CRM1_LIST_ID!;
@@ -459,14 +483,29 @@ ${totalsText}
       { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
     ];
     description = `${relatedTasksSection}
+
+Quote Number - ${quote.quoteNumber}
+PO Number - ${quote.PoNumber}
+
 Description:
 Scope of Work - ${quote.quoteNumber}
 Quote Link - ${quoteUrl}
 
 Quote Items:
 ${quoteItemsText}
-
 `;
+
+    //message for telegram
+    const telegrammsg = `Name: ${quote.title}
+Scope of Work - ${quote.quoteNumber}
+Quote Link - ${quoteUrl}
+
+Quote Items:
+${quoteItemsText}
+`;
+
+    //send to telegram
+    await telegramService.sendMessage(telegrammsg, chatId as string);
   } else if (crm === 'CRM7') {
     listid = process.env.CRM7_LIST_ID!;
     status = 'to do';
@@ -475,6 +514,10 @@ ${quoteItemsText}
       { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
     ];
     description = `${relatedTasksSection}
+
+Quote Number - ${quote.quoteNumber}
+PO Number - ${quote.PoNumber}
+
 Description:
 Scope of Work - ${quote.quoteNumber}
 Quote Link - ${quoteUrl}
@@ -508,11 +551,11 @@ ${totalsText}
 `;
   }
 
-  return { listid, status, description, customFields, comment, due_date };
+  return { listid, status, description, customFields, comment, due_date, quoteUrl };
 }
 
 async function updateClickUpTask(taskId: string, quote: any, action: string, crm: string = 'CRM1') {
-  const { topic, description, status } = buildClickUpPayload(action, quote, crm);
+  const { topic, description, status } = await buildClickUpPayload(action, quote, crm);
 
   const url = `https://api.clickup.com/api/v2/task/${taskId}`;
 
@@ -612,4 +655,37 @@ async function addClickUpComment(taskId: string, commentText: string) {
     body: JSON.stringify({ comment_text: commentText }),
   });
   if (!res.ok) console.error('Comment failed:', await res.text());
+}
+
+export async function uploadAttachmentToClickUpTask(taskId: string, fileUrl: string) {
+  if (!API_TOKEN) throw new Error('ClickUp token not set');
+
+  const fileResponse = await fetch(fileUrl);
+  if (!fileResponse.ok) {
+    throw new Error(`Failed to download file from ${fileUrl}: ${fileResponse.statusText}`);
+  }
+
+  const arrayBuffer = await fileResponse.arrayBuffer(); // No deprecation
+  const buffer = Buffer.from(arrayBuffer);
+
+  const filename = fileUrl.split('/').pop() || 'attachment';
+
+  const formData = new FormData();
+  formData.append('attachment', buffer, filename);
+
+  const response = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, {
+    method: 'POST',
+    headers: {
+      Authorization: API_TOKEN,
+      // Let fetch set Content-Type automatically
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to upload attachment: ${response.status} ${errorText}`);
+  }
+
+  return await response.json();
 }

@@ -2,6 +2,11 @@ import { Request, Response } from 'express';
 import logger from '../utils/logger';
 import { getClickUpTask } from '../services/clickUpfetch.service';
 import { getQuoteByNumber, updateQuote } from '../repositories/dynamo.quote.repository';
+import {
+  buildClickUpPayload,
+  updateClickUpTaskStatus,
+  uploadAttachmentToClickUpTask,
+} from '../services/xero.quote.service';
 
 export const BUSINESS_UNIT_FIELD_ID = 'fdf29394-d070-4384-863c-9f2f5885061f';
 export const PURCHASE_ORDER_NUMBER_FIELD_ID = '7830276e-f1bb-4efc-8e87-e34693cbd712';
@@ -67,6 +72,10 @@ export const xeroPOController = {
 
       const quoteUpdate = await updateQuote(existingQuote.id, updates);
 
+      //mark crm2 as complete
+
+      await updateClickUpTaskStatus(taskId, 'complete');
+
       return res.status(200).json({
         success: true,
         poNumber,
@@ -74,6 +83,74 @@ export const xeroPOController = {
       });
     } catch (error: any) {
       console.error('Error updating Purchase Order Number:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Unknown error',
+      });
+    }
+  },
+  poDUpdate: async (req: Request, res: Response) => {
+    try {
+      const taskId = parseInspectionClickUpPayload(req.body);
+
+      // Fetch the target ClickUp task (where POD should be attached)
+      const targetTask = await getClickUpTask(taskId);
+
+      // Extract Quote Name from task description or text_content
+      const quoteName = extractQuoteName(targetTask);
+
+      if (!quoteName) {
+        return res.status(400).json({
+          success: false,
+          error: 'Quote number not found in task description',
+        });
+      }
+
+      // Pull the existing quote from the database
+      const existingQuote = await getQuoteByNumber(quoteName);
+
+      if (!existingQuote) {
+        return res.status(404).json({
+          success: false,
+          error: 'Quote not found in the database',
+        });
+      }
+
+      // Fetch the source task where POD is currently attached
+      const sourceTaskId = existingQuote.clickUpTaskidCrm5;
+      const sourceTask = await getClickUpTask(sourceTaskId);
+
+      if (!sourceTask.attachments || !sourceTask.attachments.length) {
+        return res.status(400).json({
+          success: false,
+          error: 'No POD attachments found in the source task',
+        });
+      }
+
+      const targetTaskId = existingQuote.clickUpTaskidCrm7;
+
+      // Fetch the target task (CRM7) to see which attachments already exist
+      const targetTaskDetails = await getClickUpTask(targetTaskId);
+      const existingUrls = new Set(
+        (targetTaskDetails.attachments || []).map((att: any) => att.url)
+      );
+
+      let uploaded = 0;
+      for (const file of sourceTask.attachments) {
+        // Only upload if the file's URL is not already in the target task
+        if (!existingUrls.has(file.url)) {
+          await uploadAttachmentToClickUpTask(targetTaskId, file.url);
+          uploaded++;
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `${uploaded} new POD attachment(s) copied to task ${targetTaskId}`,
+        skipped: sourceTask.attachments.length - uploaded,
+      });
+    } catch (error: any) {
+      console.error('Error updating POD attachments:', error);
       return res.status(500).json({
         success: false,
         error: error.message || 'Unknown error',

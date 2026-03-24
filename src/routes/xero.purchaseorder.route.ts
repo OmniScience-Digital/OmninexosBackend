@@ -5,5 +5,6 @@ const router = express.Router();
 
 // Create a new quote
 router.post('/purchaseorder', xeroPOController.poUpdate);
+router.post('/pod', xeroPOController.poDUpdate);
 
 export default router;
