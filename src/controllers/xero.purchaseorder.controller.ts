@@ -3,26 +3,33 @@ import logger from '../utils/logger';
 import { getClickUpTask } from '../services/clickUpfetch.service';
 import { getQuoteByNumber, updateQuote } from '../repositories/dynamo.quote.repository';
 import {
-  buildClickUpPayload,
+  extractQuoteName,
   updateClickUpTaskStatus,
   uploadAttachmentToClickUpTask,
 } from '../services/xero.quote.service';
+import { getInvByXeroInvoiceNumber, updateInvoice } from '../repositories/xero.invoice.repository';
+import { ClickUpTaskResponse } from '../schema/xero.schema';
 
 export const BUSINESS_UNIT_FIELD_ID = 'fdf29394-d070-4384-863c-9f2f5885061f';
 export const PURCHASE_ORDER_NUMBER_FIELD_ID = '7830276e-f1bb-4efc-8e87-e34693cbd712';
+
+const CUSTOMER_FIELD_ID = 'b1b8b307-162d-46b6-8dbb-6e995d1130bc';
+const CRM07_LINK_FIELD_ID = '30dfc6ea-3e9b-4bf3-962d-1586cd4482d2';
+
+const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
 
 export const xeroPOController = {
   poUpdate: async (req: Request, res: Response) => {
     try {
       const taskId = parseInspectionClickUpPayload(req.body);
 
-      // Fetch the full ClickUp task
+      // Fetch the full ClickUp task (CRM2)
       const task = await getClickUpTask(taskId);
 
       // Extract Purchase Order Number from custom fields
       const poNumber = extractPurchaseOrderNumber(task);
-      // Extract Quote Name from text_content or description
 
+      // Extract Quote Name from text_content or description
       const quoteName = extractQuoteName(task);
 
       if (!quoteName) {
@@ -42,7 +49,7 @@ export const xeroPOController = {
         });
       }
 
-      // Build updates object using the actual fields from existingQuote
+      // Build updates object
       const updates: any = {
         quoteNumber: existingQuote.quoteNumber,
         quoteReference: existingQuote.quoteReference,
@@ -58,9 +65,8 @@ export const xeroPOController = {
         quTotal: existingQuote.quTotal,
         quoteAction: existingQuote.quoteAction,
         title: existingQuote.title,
-        // Set purchase order number (null if not provided)
+        invNumber: existingQuote.invNumber,
         PoNumber: poNumber || existingQuote.purchaseOrderNumber || null,
-        // Preserve ClickUp task IDs
         clickUpTaskidCrm1: existingQuote.clickUpTaskidCrm1,
         clickUpTaskidCrm2: existingQuote.clickUpTaskidCrm2,
         clickUpTaskidCrm5: existingQuote.clickUpTaskidCrm5,
@@ -70,10 +76,35 @@ export const xeroPOController = {
         createdAt: existingQuote.createdAt,
       };
 
-      const quoteUpdate = await updateQuote(existingQuote.id, updates);
+      // Update quote in DB
+      await updateQuote(existingQuote.id, updates);
 
-      //mark crm2 as complete
+      // Check attachments exist on CRM2 task
+      if (!task.attachments || !task.attachments.length) {
+        return res.status(400).json({
+          success: false,
+          error: 'No PO attachments found in the source task',
+        });
+      }
 
+      // Copy PO files to CRM5 and CRM7 (dedup by URL)
+      for (const targetTaskId of [
+        existingQuote.clickUpTaskidCrm5,
+        existingQuote.clickUpTaskidCrm7,
+      ]) {
+        if (!targetTaskId) continue;
+
+        const targetTask = await getClickUpTask(targetTaskId);
+        const existingUrls = new Set((targetTask.attachments || []).map((att: any) => att.url));
+
+        for (const file of task.attachments) {
+          if (!existingUrls.has(file.url)) {
+            await uploadAttachmentToClickUpTask(targetTaskId, file.url);
+          }
+        }
+      }
+
+      // Mark CRM2 as complete
       await updateClickUpTaskStatus(taskId, 'complete');
 
       return res.status(200).json({
@@ -160,38 +191,43 @@ export const xeroPOController = {
   invUpdate: async (req: Request, res: Response) => {
     try {
       const taskId = parseInspectionClickUpPayload(req.body);
-
-      // Fetch the target ClickUp task (where POD should be attached)
       const targetTask = await getClickUpTask(taskId);
 
-      // Extract Quote Name from task description or text_content
       const quoteName = extractQuoteName(targetTask);
-
       if (!quoteName) {
-        return res.status(400).json({
-          success: false,
-          error: 'Quote number not found in task description',
-        });
+        return res.status(400).json({ success: false, error: 'Quote number not found' });
       }
 
-      // Pull the existing quote from the database
       const existingQuote = await getQuoteByNumber(quoteName);
-
       if (!existingQuote) {
-        return res.status(404).json({
-          success: false,
-          error: 'Quote not found in the database',
-        });
+        return res.status(404).json({ success: false, error: 'Quote not found' });
       }
 
-      console.log(JSON.stringify(targetTask));
-      console.log(JSON.stringify(quoteName));
+      const invoiceNumberField = targetTask.custom_fields.find(
+        (field: any) => field.name === 'Invoice Number'
+      );
+      const invoiceNumber = invoiceNumberField?.value || null;
+      if (!invoiceNumber) {
+        return res.status(400).json({ success: false, error: 'Invoice number not found' });
+      }
 
-      return res.status(200).json({
-        success: true,
-      });
+      const targetInvoice = await getInvByXeroInvoiceNumber(invoiceNumber);
+      if (!targetInvoice) {
+        return res.status(404).json({ success: false, error: 'Invoice not found' });
+      }
+
+      // 1. Create ClickUp task in CRM9
+      const task = await createCrm9Task(targetInvoice, existingQuote, invoiceNumber);
+
+      // 2. Update invoice with data from quote and new task ID
+      await updateInvoiceFromQuote(targetInvoice, existingQuote, task.id);
+
+      // 3. Update quote with the new task ID
+      await updateQuoteWithTaskId(existingQuote, task.id);
+
+      return res.status(200).json({ success: true });
     } catch (error: any) {
-      console.error('Error updating POD attachments:', error);
+      logger.error('Error in invUpdate:', error);
       return res.status(500).json({
         success: false,
         error: error.message || 'Unknown error',
@@ -224,9 +260,128 @@ function extractPurchaseOrderNumber(task: any): string | null {
   return null;
 }
 
-// Extract Quote Name from task text_content or description
-function extractQuoteName(task: any): string | null {
-  const text = task.text_content || task.description || '';
-  const match = text.match(/Scope of Work\s*-\s*(.+)/);
-  return match ? match[1].trim() : null;
+async function createClickUpTask(
+  description: string,
+  topic: string,
+  listId: string,
+  status: string,
+  customFields: any[]
+): Promise<ClickUpTaskResponse> {
+  const res = await fetch(`https://api.clickup.com/api/v2/list/${listId}/task`, {
+    method: 'POST',
+    headers: {
+      Authorization: API_TOKEN,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: topic,
+      description,
+      status: status,
+      custom_fields: customFields,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  return (await res.json()) as ClickUpTaskResponse;
+}
+
+// Helper function to create the CRM9 ClickUp task
+async function createCrm9Task(invoice: any, quote: any, invoiceNumber: string) {
+  const linktoCrm07 = `https://app.clickup.com/t/${quote.clickUpTaskidCrm7}`;
+  const topic = `${invoiceNumber} ,${quote.quoteNumber} ,${invoice.customerName}`;
+
+  const listid = process.env.CRM9_LIST_ID!;
+  const status = 'to do';
+  const customFields = [
+    { id: CUSTOMER_FIELD_ID, value: invoice.customerName },
+    { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
+    { id: CRM07_LINK_FIELD_ID, value: linktoCrm07 },
+  ];
+
+  const description = `
+    Description:
+    Invoice Date Sent - ${invoice.invoiceDate}
+    Invoice Amount - ${invoice.amountDue}
+    Due Date - ${invoice.dueDate}
+  `;
+
+  const task = await createClickUpTask(description, topic, listid, status, customFields);
+  if (!task) {
+    logger.error(`Failed to create task for ${invoiceNumber} in CRM09`);
+    throw new Error('Failed to create ClickUp task');
+  }
+  return task;
+}
+
+// Helper function to update the invoice with fields from the quote and the new task ID
+
+async function updateInvoiceFromQuote(invoice: any, quote: any, newTaskId: string) {
+  // Build updates object without updatedAt (let updateInvoice handle it)
+  const updates: any = {
+    invoiceNumber: invoice.invoiceNumber,
+    reference: quote.quoteReference || invoice.reference,
+    customerID: invoice.customerID,
+    customerName: invoice.customerName,
+    invoiceDate: invoice.invoiceDate,
+    dueDate: invoice.dueDate,
+    status: invoice.status,
+    currencyCode: invoice.currencyCode,
+    lineItems: invoice.lineItems || quote.lineItems,
+    subTotal: invoice.subTotal,
+    taxTotal: invoice.taxTotal,
+    total: invoice.total,
+    amountPaid: invoice.amountPaid,
+    amountDue: invoice.amountDue,
+    PoNumber: quote.PoNumber || invoice.PoNumber,
+    invoiceAction: invoice.invoiceAction,
+    // Fields from quote
+    businessUnitvalueid: quote.businessUnitvalueid,
+    businessUnitvalue: quote.businessUnitvalue,
+    clickUpTaskidCrm1: quote.clickUpTaskidCrm1,
+    clickUpTaskidCrm2: quote.clickUpTaskidCrm2,
+    clickUpTaskidCrm5: quote.clickUpTaskidCrm5,
+    clickUpTaskidCrm7: quote.clickUpTaskidCrm7,
+    clickUpTaskidCrm9: newTaskId,
+    quoteNumber: quote.quoteNumber,
+    xeroQuoteId: invoice.xeroQuoteId,
+    createdAt: invoice.createdAt, // keep as-is
+  };
+
+  await updateInvoice(invoice.id, updates);
+  logger.info('✅ Invoice updated with quote fields:', updates);
+}
+async function updateQuoteWithTaskId(quote: any, newTaskId: string) {
+  // Follow the same pattern: update only the field that changes
+  const updates = {
+    clickUpTaskidCrm9: newTaskId,
+  };
+  await updateQuote(quote.id, updates);
+  logger.info('✅ Quote updated with CRM9 task ID:', newTaskId);
+}
+
+export async function updateClickUpTask(taskId: string, description: string) {
+  const url = `https://api.clickup.com/api/v2/task/${taskId}`;
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: API_TOKEN,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      description,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    logger.error(`Failed to update ClickUp task ${taskId}: ${err}`);
+    return;
+  }
+
+  logger.info(`Updated ClickUp task ${taskId}`);
+  return taskId;
 }

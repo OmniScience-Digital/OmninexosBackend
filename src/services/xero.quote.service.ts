@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import FormData from 'form-data';
 import { getAccessToken } from '../helper/tokens/token.helper';
-import { Quote } from '../schema/xero.schema';
+import { ClickUpTaskResponse, Quote, XeroQuotesResponse } from '../schema/xero.schema';
 import logger from '../utils/logger';
 import { getXeroConfig, updateXeroConfig } from '../repositories/dynamo.xeroconfig.repository';
 import {
@@ -18,16 +18,6 @@ const Xero_Url = `https://go.xero.com/app/!97lqx/quotes/`;
 const CUSTOMER_FIELD_ID = 'b1b8b307-162d-46b6-8dbb-6e995d1130bc';
 const PO_NUMBER_FIELD_ID = '7830276e-f1bb-4efc-8e87-e34693cbd712';
 const BUSINESS_UNIT_FIELD_ID = 'fdf29394-d070-4384-863c-9f2f5885061f';
-
-interface XeroQuotesResponse {
-  Quotes: Quote[];
-}
-
-interface ClickUpTaskResponse {
-  id: string;
-  name: string;
-  [key: string]: any;
-}
 
 export async function pollQuotes() {
   try {
@@ -165,6 +155,7 @@ export async function handleQuoteStatuses(quote: Quote) {
       taxTotal: quote.TotalTax,
       quTotal: quote.Total,
       title: quote.Title,
+      invNumber: existingQuote.invNumber,
       PoNumber: existingQuote.PoNumber,
       quoteAction,
       businessUnitvalueid: existingQuote.businessUnitvalueid,
@@ -180,7 +171,7 @@ export async function handleQuoteStatuses(quote: Quote) {
     };
 
     // Handle task creation/updates based on quote action
-    await handleQuoteTasks(updates, quoteAction, existingQuote);
+    await handleQuoteTasks(updates, quoteAction);
 
     await updateQuote(existingQuote.id, updates);
   } else {
@@ -194,7 +185,7 @@ export async function handleQuoteStatuses(quote: Quote) {
       customerName: quote.Contact?.Name || '',
       quoteIssueDate,
       quoteExpireyDate,
-      title: quote.Title,
+      title: quote.Title || quote.QuoteNumber + ', ' + quote.Contact?.Name + ', ' + quote.Reference,
       PoNumber: '',
       quoteStatus: quote.Status || '',
       currencyCode: quote.CurrencyCode || '',
@@ -202,6 +193,7 @@ export async function handleQuoteStatuses(quote: Quote) {
       subTotal: quote.SubTotal || 0,
       taxTotal: quote.TotalTax || 0,
       quTotal: quote.Total || 0,
+      invNumber: '',
       quoteAction: 'Created',
       businessUnitvalueid: '',
       businessUnitvalue: '',
@@ -215,7 +207,7 @@ export async function handleQuoteStatuses(quote: Quote) {
     };
 
     // Handle task creation for new quote
-    await handleQuoteTasks(newItem, 'Created', null);
+    await handleQuoteTasks(newItem, 'Created');
 
     await createQuote(newItem);
   }
@@ -223,7 +215,7 @@ export async function handleQuoteStatuses(quote: Quote) {
   logger.info(`Quote ${quote.QuoteNumber} processed with action: ${quoteAction}`);
 }
 
-async function handleQuoteTasks(quote: any, action: string, existingQuote: any | null) {
+async function handleQuoteTasks(quote: any, action: string) {
   switch (action) {
     case 'Created':
       // Create task in CRM 1 only
@@ -240,7 +232,7 @@ async function handleQuoteTasks(quote: any, action: string, existingQuote: any |
       if (!quote.clickUpTaskidCrm2) {
         const taskCrm2 = await createClickUpTaskForCRM('CRM2', 'Sent', quote);
         if (taskCrm2) {
-          quote.clickUpTaskidCrm2 = taskCrm2.id;
+          quote.clickUpTaskidCrm2 = taskCrm2.id; // <-- now the ID is stored
         }
       }
 
@@ -248,10 +240,17 @@ async function handleQuoteTasks(quote: any, action: string, existingQuote: any |
       if (quote.clickUpTaskidCrm1) {
         const { status } = await buildClickUpPayload(action, quote, 'CRM1');
         await updateClickUpTaskStatus(quote.clickUpTaskidCrm1, status);
-        // Add comment
         await addClickUpComment(quote.clickUpTaskidCrm1, 'Quote updated and sent');
-        // Now update CRM‑01 description to include the link to CRM‑02
-        // Use updateClickUpTask for CRM1 with the same quote (now has crm2 id)
+
+        // ✅ ADD THE LINK HERE (after the CRM‑02 ID is available)
+        if (quote.clickUpTaskidCrm2) {
+          await addClickUpComment(
+            quote.clickUpTaskidCrm1,
+            `Task moved to CRM-02\nhttps://app.clickup.com/t/${quote.clickUpTaskidCrm2}`
+          );
+        }
+
+        // Update CRM‑01 description with the link (handled by buildClickUpPayload)
         await updateClickUpTask(quote.clickUpTaskidCrm1, quote, action, 'CRM1');
       }
       break;
@@ -322,11 +321,6 @@ async function createClickUpTaskForCRM(crm: string, action: string, quote: any):
 
   await addClickUpComment(task.id, comment);
 
-  if (action === 'Sent') {
-    let crm01_message = `Task moved to CRM-02\nhttps://app.clickup.com/t/${quote.clickUpTaskidCrm2}`;
-    await addClickUpComment(quote.clickUpTaskidCrm1, crm01_message);
-  }
-
   logger.info(`Created task ${task.id} for ${quote.quoteNumber} in ${crm}`);
   return task;
 }
@@ -379,6 +373,18 @@ async function constructClickUpPayload(
   let listid = '';
   let status = '';
   // Build quote items (used by some cases)
+  const quoteItemsCrm = (quote.lineItems || [])
+    .map((item: any, index: number) => {
+      const taxRate =
+        item.LineAmount && item.LineAmount !== 0
+          ? ((item.TaxAmount / item.LineAmount) * 100).toFixed(2)
+          : '0.00';
+      return `Item ${index + 1}:
+    - Item Description: ${item.Description}
+    - Item Quantity: ${item.Quantity}`;
+    })
+    .join('\n\n');
+
   const quoteItemsText = (quote.lineItems || [])
     .map((item: any, index: number) => {
       const taxRate =
@@ -423,7 +429,7 @@ Quote Total: ${quote.quTotal}
   if (crm === 'CRM1') {
     listid = process.env.CRM1_LIST_ID!;
     status = action.toLowerCase() === 'sent' ? 'complete' : 'to do';
-    due_date = new Date(quote.quoteExpireyDate).getTime() + 2 * 24 * 60 * 60 * 1000;
+    due_date = new Date(quote.quoteIssueDate).getTime() + 2 * 24 * 60 * 60 * 1000;
     // For CRM1, we skip the Business Unit line in the description
     let relatedSection = '';
     if (action === 'Sent' && quote.clickUpTaskidCrm2) {
@@ -431,7 +437,7 @@ Quote Total: ${quote.quTotal}
     }
     const baseDescription = `${relatedSection}
 Description:
-Scope of Work - ${quote.quoteNumber}
+Scope of Work - ${quote.title}
 Quote Status - ${quote.quoteStatus}
 Quote Expiry - ${quote.quoteExpireyDate}
 
@@ -461,7 +467,7 @@ ${totalsText}
     customFields = [{ id: CUSTOMER_FIELD_ID, value: quote.customerName }];
     description = `${relatedTasksSection}
 Description:
-Scope of Work - ${quote.quoteNumber}
+Scope of Work - ${quote.title}
 Quote Status - ${quote.quoteStatus}
 Quote Expiry - ${quote.quoteExpireyDate}
 
@@ -488,20 +494,20 @@ Quote Number - ${quote.quoteNumber}
 PO Number - ${quote.PoNumber}
 
 Description:
-Scope of Work - ${quote.quoteNumber}
+Scope of Work - ${quote.title}
 Quote Link - ${quoteUrl}
 
 Quote Items:
-${quoteItemsText}
+${quoteItemsCrm}
 `;
 
     //message for telegram
     const telegrammsg = `Name: ${quote.title}
-Scope of Work - ${quote.quoteNumber}
+Scope of Work - ${quote.title}
 Quote Link - ${quoteUrl}
 
 Quote Items:
-${quoteItemsText}
+${quoteItemsCrm}
 `;
 
     //send to telegram
@@ -519,35 +525,12 @@ Quote Number - ${quote.quoteNumber}
 PO Number - ${quote.PoNumber}
 
 Description:
-Scope of Work - ${quote.quoteNumber}
+Scope of Work - ${quote.title}
 Quote Link - ${quoteUrl}
 
 Quote Items:
-${quoteItemsText}
+${quoteItemsCrm}
 
-`;
-  } else if (crm === 'CRM9') {
-    listid = process.env.CRM9_LIST_ID!;
-    status = 'to do';
-    description = `${relatedTasksSection}Name - ${quote.quoteNumber}
-
-Custom Fields:
-Customer - ${quote.customerName}
-Due Date - ${quote.quoteExpireyDate}
-Business Unit - ${quote.businessUnitvalue}
-
-Description:
-Scope of Work - ${quote.quoteNumber}
-Quote Status - ${quote.quoteStatus}
-Quote Action - ${action}
-Quote Expiry - ${quote.quoteExpireyDate}
-
-Quote Link - ${quoteUrl}
-
-Quote Items:
-${quoteItemsText}
-
-${totalsText}
 `;
   }
 
@@ -644,7 +627,7 @@ function getRelatedTasksSection(quote: any, crm: string): string {
   return `**Related Tasks**\n${links.join('\n')}\n\n`;
 }
 
-async function addClickUpComment(taskId: string, commentText: string) {
+export async function addClickUpComment(taskId: string, commentText: string) {
   if (!commentText) return;
   const res = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/comment`, {
     method: 'POST',
@@ -688,4 +671,13 @@ export async function uploadAttachmentToClickUpTask(taskId: string, fileUrl: str
   }
 
   return await response.json();
+}
+
+// Extract Quote Name (quote number) from task
+export function extractQuoteName(task: any): string | null {
+  if (!task.name) return null;
+
+  // Take the first part before the first comma
+  const quoteName = task.name.split(',')[0].trim();
+  return quoteName || null;
 }

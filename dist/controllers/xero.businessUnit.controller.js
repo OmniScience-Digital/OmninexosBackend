@@ -1,7 +1,9 @@
 import logger from "../utils/logger.js";
 import { getClickUpTask } from "../services/clickUpfetch.service.js";
 import { getQuoteByNumber, updateQuote } from "../repositories/dynamo.quote.repository.js";
+import { extractQuoteName } from "../services/xero.quote.service.js";
 export const businessUnit_FIELD_ID = "fdf29394-d070-4384-863c-9f2f5885061f";
+const API_TOKEN = process.env.CLICKUP_API_TOKEN;
 export const xeroBusinessUnitController = {
     businessUnit: async (req, res) => {
         try {
@@ -12,6 +14,7 @@ export const xeroBusinessUnitController = {
             const businessUnit = extractBusinessUnit(task);
             // Extract Quote Name from text_content or description
             const quoteName = extractQuoteName(task);
+            // console.log(JSON.stringify(req.body));
             // Fetch quote from DB
             const existingQuote = await getQuoteByNumber(quoteName);
             if (!existingQuote) {
@@ -88,10 +91,4 @@ function extractBusinessUnit(task) {
         name: selectedOption.name, // human-readable name
         rawValue: field.value, // value sent by ClickUp
     };
-}
-// Extract Quote Name from task text_content or description
-function extractQuoteName(task) {
-    const text = task.text_content || task.description || "";
-    const match = text.match(/Scope of Work\s*-\s*(.+)/);
-    return match ? match[1].trim() : null;
 }

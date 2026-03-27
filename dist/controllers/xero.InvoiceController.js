@@ -2,6 +2,9 @@ import crypto from "crypto";
 import fetch from "node-fetch";
 import logger from "../utils/logger.js";
 import { getAccessToken } from "../helper/tokens/token.helper.js";
+import { createInvoice, getInvByXeroInvoiceId, updateInvoice, } from "../repositories/xero.invoice.repository.js";
+import { updateClickUpTask } from "./xero.purchaseorder.controller.js";
+import { addClickUpComment } from "../services/xero.quote.service.js";
 /*
 |--------------------------------------------------------------------------
 | Controller
@@ -93,51 +96,6 @@ async function fetchFromXero(url, tenantId) {
 }
 /*
 |--------------------------------------------------------------------------
-| Invoice Handler
-|--------------------------------------------------------------------------
-*/
-async function handleInvoiceEvent(event) {
-    try {
-        logger.info("Fetching invoice..");
-        const data = await fetchFromXero(event.resourceUrl, event.tenantId);
-        const invoice = data?.Invoices?.[0];
-        if (!invoice)
-            return;
-        const status = invoice.Status;
-        const amountPaid = invoice.AmountPaid || 0;
-        const amountDue = invoice.AmountDue || 0;
-        if (status === "DRAFT") {
-            console.log("\uD83D\uDFE1 CREATE INVOICE (DRAFT)");
-            console.log("InvoiceNumber:", invoice.InvoiceNumber);
-        }
-        else if (status === "AUTHORISED" && amountPaid === 0) {
-            console.log("\uD83D\uDFE2 APPROVED INVOICE");
-            console.log("InvoiceNumber:", invoice.InvoiceNumber);
-            console.log("DueDate:", invoice.DueDateString);
-        }
-        else if (amountPaid > 0) {
-            console.log("\uD83D\uDCB0 PAYMENT RECORDED");
-            console.log("InvoiceNumber:", invoice.InvoiceNumber);
-            console.log("AmountPaid:", amountPaid);
-            console.log("AmountDue:", amountDue);
-        }
-        // Line items (keep yours)
-        const lineItems = invoice.LineItems || [];
-        for (const item of lineItems) {
-            console.log("---- LINE ITEM ----");
-            console.log("Description:", item.Description);
-            console.log("Quantity:", item.Quantity);
-            console.log("UnitAmount:", item.UnitAmount);
-            console.log("AccountCode:", item.AccountCode);
-            console.log("LineAmount:", item.LineAmount);
-        }
-    }
-    catch (err) {
-        console.error("Invoice handler error:", err);
-    }
-}
-/*
-|--------------------------------------------------------------------------
 | Contact Handler
 |--------------------------------------------------------------------------
 */
@@ -173,6 +131,393 @@ async function handleSubscriptionEvent(event) {
     }
     catch (err) {
         logger.error("Subscription handler error:", err);
+    }
+}
+/*
+|--------------------------------------------------------------------------
+| Invoice Handler
+|--------------------------------------------------------------------------
+*/
+// async function handleInvoiceEvent(event: XeroWebhookEvent) {
+//   try {
+//     const data = await fetchFromXero<XeroInvoiceResponse>(event.resourceUrl, event.tenantId);
+//     const invoice = data?.Invoices?.[0];
+//     if (!invoice) return;
+//     console.log(JSON.stringify(invoice));
+//     const status = invoice.Status;
+//     const amountPaid = invoice.AmountPaid || 0;
+//     const amountDue = invoice.AmountDue || 0;
+//     if (status === 'DRAFT') {
+//       logger.info('🟡 CREATE INVOICE (DRAFT)');
+//       const newItem: any = {
+//         id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+//         // Core
+//         invoiceId: invoice.InvoiceID,
+//         invoiceNumber: invoice.InvoiceNumber || '',
+//         // Link to quote
+//         xeroQuoteId: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 4)}`,
+//         quoteNumber: 'NO_QUOTE', 
+//         reference: invoice.Reference || '',
+//         // Customer
+//         customerID: invoice.Contact?.ContactID || '',
+//         customerName: invoice.Contact?.Name || '',
+//         // Dates
+//         invoiceDate: null,
+//         dueDate: null,
+//         // Status
+//         status: invoice.Status || 'DRAFT',
+//         invoiceAction: 'Created',
+//         // Currency
+//         currencyCode: invoice.CurrencyCode || '',
+//         // Line items
+//         lineItems: invoice.LineItems || [],
+//         // Totals
+//         subTotal: invoice.SubTotal || 0,
+//         taxTotal: invoice.TotalTax || 0,
+//         total: invoice.Total || 0,
+//         amountPaid: invoice.AmountPaid || 0,
+//         amountDue: invoice.AmountDue || 0,
+//         // Extra fields
+//         PoNumber: '', // empty string
+//         businessUnitvalueid: '', // empty string
+//         businessUnitvalue: '', // empty string
+//         // CRM
+//         clickUpTaskidCrm1: '',
+//         clickUpTaskidCrm2: '',
+//         clickUpTaskidCrm5: '',
+//         clickUpTaskidCrm7: '',
+//         clickUpTaskidCrm9: '',
+//         // timestamps
+//         createdAt: new Date().toISOString(),
+//         updatedAt: new Date().toISOString(),
+//       };
+//       // Save to Dynamo
+//       await createInvoice(newItem);
+//     }
+//     if (status === 'AUTHORISED' && amountPaid === 0) {
+//       const existingInv = await getInvByXeroInvoiceId(invoice.InvoiceID); // fetch by invoiceId
+//       logger.info('🟢 APPROVED INVOICE');
+//       let invoiceAction = 'Approved';
+//       const invoiceDate = invoice.DateString
+//         ? new Date(invoice.DateString).toISOString()
+//         : new Date().toISOString();
+//       const dueDate = invoice.DueDateString
+//         ? new Date(invoice.DueDateString).toISOString()
+//         : new Date().toISOString();
+//       if (existingInv) {
+//         // Check if line items or totals changed
+//         const lineItemsChanged =
+//           JSON.stringify(existingInv.lineItems) !== JSON.stringify(invoice.LineItems);
+//         const totalsChanged =
+//           existingInv.subTotal !== invoice.SubTotal ||
+//           existingInv.taxTotal !== invoice.TotalTax ||
+//           existingInv.total !== invoice.Total;
+//         // Adjust invoiceAction if something changed
+//         if (existingInv.status !== invoice.Status) {
+//           invoiceAction = 'Approved';
+//         } else if (lineItemsChanged || totalsChanged) {
+//           invoiceAction = 'Updated';
+//         } else {
+//           logger.info(`No changes for invoice ${invoice.InvoiceNumber}`);
+//           return;
+//         }
+//         const updates: any = {
+//           invoiceNumber: invoice.InvoiceNumber,
+//           reference: invoice.Reference || '',
+//           customerID: invoice.Contact?.ContactID || '',
+//           customerName: invoice.Contact?.Name || '',
+//           invoiceDate,
+//           dueDate,
+//           status: invoice.Status,
+//           currencyCode: invoice.CurrencyCode,
+//           lineItems: invoice.LineItems || [],
+//           subTotal: invoice.SubTotal,
+//           taxTotal: invoice.TotalTax,
+//           total: invoice.Total,
+//           amountPaid: invoice.AmountPaid || 0,
+//           amountDue: invoice.AmountDue || 0,
+//           PoNumber: existingInv.PoNumber || '',
+//           invoiceAction,
+//           businessUnitvalueid: existingInv.businessUnitvalueid,
+//           businessUnitvalue: existingInv.businessUnitvalue,
+//           clickUpTaskidCrm1: existingInv.clickUpTaskidCrm1,
+//           clickUpTaskidCrm2: existingInv.clickUpTaskidCrm2,
+//           clickUpTaskidCrm5: existingInv.clickUpTaskidCrm5,
+//           clickUpTaskidCrm7: existingInv.clickUpTaskidCrm7,
+//           clickUpTaskidCrm9: existingInv.clickUpTaskidCrm9,
+//           xeroQuoteId: existingInv.xeroQuoteId || '0000',
+//           createdAt: existingInv.createdAt,
+//         };
+//         // Update Dynamo
+//         await updateInvoice(existingInv.id, updates);
+//       }
+//     } else if (amountPaid > 0) {
+//       logger.info('💰 PAYMENT RECORDED');
+//       // Fetch existing invoice by invoiceId
+//       const existingInv = await getInvByXeroInvoiceId(invoice.InvoiceID);
+//       if (!existingInv) {
+//         logger.warn(`Invoice not found in DB: ${invoice.InvoiceNumber}`);
+//         return;
+//       }
+//       // Determine if any key fields changed (optional)
+//       const lineItemsChanged =
+//         JSON.stringify(existingInv.lineItems) !== JSON.stringify(invoice.LineItems);
+//       const totalsChanged =
+//         existingInv.subTotal !== invoice.SubTotal ||
+//         existingInv.taxTotal !== invoice.TotalTax ||
+//         existingInv.total !== invoice.Total;
+//       let invoiceAction = 'Payment Recorded';
+//       if (lineItemsChanged || totalsChanged) {
+//         invoiceAction = 'Updated';
+//       }
+//       const invoiceDate = invoice.DateString
+//         ? new Date(invoice.DateString).toISOString()
+//         : existingInv.invoiceDate || new Date().toISOString();
+//       const dueDate = invoice.DueDateString
+//         ? new Date(invoice.DueDateString).toISOString()
+//         : existingInv.dueDate || new Date().toISOString();
+//       const updates: any = {
+//         invoiceNumber: invoice.InvoiceNumber,
+//         reference: invoice.Reference || '',
+//         customerID: invoice.Contact?.ContactID || '',
+//         customerName: invoice.Contact?.Name || '',
+//         invoiceDate,
+//         dueDate,
+//         status: invoice.Status,
+//         currencyCode: invoice.CurrencyCode || '',
+//         lineItems: invoice.LineItems || [],
+//         subTotal: invoice.SubTotal,
+//         taxTotal: invoice.TotalTax,
+//         total: invoice.Total,
+//         amountPaid: invoice.AmountPaid || 0,
+//         amountDue: invoice.AmountDue || 0,
+//         PoNumber: existingInv.PoNumber || '',
+//         invoiceAction,
+//         businessUnitvalueid: existingInv.businessUnitvalueid,
+//         businessUnitvalue: existingInv.businessUnitvalue,
+//         clickUpTaskidCrm1: existingInv.clickUpTaskidCrm1,
+//         clickUpTaskidCrm2: existingInv.clickUpTaskidCrm2,
+//         clickUpTaskidCrm5: existingInv.clickUpTaskidCrm5,
+//         clickUpTaskidCrm7: existingInv.clickUpTaskidCrm7,
+//         clickUpTaskidCrm9: existingInv.clickUpTaskidCrm9,
+//         xeroQuoteId: existingInv.xeroQuoteId || '0000',
+//         createdAt: existingInv.createdAt,
+//       };
+//       await updateInvoice(existingInv.id, updates);
+//         const description = `
+//       Description:
+//       Invoice Date Sent - ${updates.invoiceDate}
+//       Invoice Total - ${updates.total}
+//       Due Date - ${updates.dueDate}
+//       Payment Amount - ${updates.amountPaid}
+//       Payment Date - ${updates.invoiceDate}
+//       Balance Remaining - ${updates.amountDue}
+//       `;
+//       //update the task in click up 
+//       await updateClickUpTask(updates.clickUpTaskidCrm9, description);
+//     }
+//   } catch (err) {
+//     console.error('Invoice handler error:', err);
+//   }
+// }
+async function handleInvoiceEvent(event) {
+    try {
+        const data = await fetchFromXero(event.resourceUrl, event.tenantId);
+        const invoice = data?.Invoices?.[0];
+        if (!invoice)
+            return;
+        const status = invoice.Status;
+        const amountPaid = invoice.AmountPaid || 0;
+        const amountDue = invoice.AmountDue || 0;
+        if (status === "DRAFT") {
+            logger.info("\uD83D\uDFE1 CREATE INVOICE (DRAFT)");
+            // Guard: don't create duplicates
+            const existingInv = await getInvByXeroInvoiceId(invoice.InvoiceID);
+            if (existingInv) {
+                logger.info(`Invoice ${invoice.InvoiceNumber} already exists, skipping create`);
+                return;
+            }
+            const newItem = {
+                id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+                // Core
+                invoiceId: invoice.InvoiceID,
+                invoiceNumber: invoice.InvoiceNumber || "",
+                // Link to quote
+                xeroQuoteId: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 4)}`,
+                quoteNumber: "NO_QUOTE",
+                reference: invoice.Reference || "",
+                // Customer
+                customerID: invoice.Contact?.ContactID || "",
+                customerName: invoice.Contact?.Name || "",
+                // Dates
+                invoiceDate: null,
+                dueDate: null,
+                // Status
+                status: invoice.Status || "DRAFT",
+                invoiceAction: "Created",
+                // Currency
+                currencyCode: invoice.CurrencyCode || "",
+                // Line items
+                lineItems: invoice.LineItems || [],
+                // Totals
+                subTotal: invoice.SubTotal || 0,
+                taxTotal: invoice.TotalTax || 0,
+                total: invoice.Total || 0,
+                amountPaid: invoice.AmountPaid || 0,
+                amountDue: invoice.AmountDue || 0,
+                // Extra fields
+                PoNumber: "", // empty string
+                businessUnitvalueid: "", // empty string
+                businessUnitvalue: "", // empty string
+                // CRM
+                clickUpTaskidCrm1: "",
+                clickUpTaskidCrm2: "",
+                clickUpTaskidCrm5: "",
+                clickUpTaskidCrm7: "",
+                clickUpTaskidCrm9: "",
+                // timestamps
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            };
+            // Save to Dynamo
+            await createInvoice(newItem);
+        }
+        if (status === "AUTHORISED" && amountPaid === 0) {
+            const existingInv = await getInvByXeroInvoiceId(invoice.InvoiceID); // fetch by invoiceId
+            logger.info("\uD83D\uDFE2 APPROVED INVOICE");
+            let invoiceAction = "Approved";
+            const invoiceDate = invoice.DateString
+                ? new Date(invoice.DateString).toISOString()
+                : new Date().toISOString();
+            const dueDate = invoice.DueDateString
+                ? new Date(invoice.DueDateString).toISOString()
+                : new Date().toISOString();
+            if (existingInv) {
+                // Check if line items or totals changed
+                const lineItemsChanged = JSON.stringify(existingInv.lineItems) !== JSON.stringify(invoice.LineItems);
+                const totalsChanged = existingInv.subTotal !== invoice.SubTotal ||
+                    existingInv.taxTotal !== invoice.TotalTax ||
+                    existingInv.total !== invoice.Total;
+                // Adjust invoiceAction if something changed
+                if (existingInv.status !== invoice.Status) {
+                    invoiceAction = "Approved";
+                }
+                else if (lineItemsChanged || totalsChanged) {
+                    invoiceAction = "Updated";
+                }
+                else {
+                    logger.info(`No changes for invoice ${invoice.InvoiceNumber}`);
+                    return;
+                }
+                const updates = {
+                    invoiceNumber: invoice.InvoiceNumber,
+                    reference: invoice.Reference || "",
+                    customerID: invoice.Contact?.ContactID || "",
+                    customerName: invoice.Contact?.Name || "",
+                    invoiceDate,
+                    dueDate,
+                    status: invoice.Status,
+                    currencyCode: invoice.CurrencyCode,
+                    lineItems: invoice.LineItems || [],
+                    subTotal: invoice.SubTotal,
+                    taxTotal: invoice.TotalTax,
+                    total: invoice.Total,
+                    amountPaid: invoice.AmountPaid || 0,
+                    amountDue: invoice.AmountDue || 0,
+                    PoNumber: existingInv.PoNumber || "",
+                    invoiceAction,
+                    businessUnitvalueid: existingInv.businessUnitvalueid,
+                    businessUnitvalue: existingInv.businessUnitvalue,
+                    clickUpTaskidCrm1: existingInv.clickUpTaskidCrm1,
+                    clickUpTaskidCrm2: existingInv.clickUpTaskidCrm2,
+                    clickUpTaskidCrm5: existingInv.clickUpTaskidCrm5,
+                    clickUpTaskidCrm7: existingInv.clickUpTaskidCrm7,
+                    clickUpTaskidCrm9: existingInv.clickUpTaskidCrm9,
+                    xeroQuoteId: existingInv.xeroQuoteId || "0000",
+                    createdAt: existingInv.createdAt,
+                };
+                const description = `
+    Description:
+    Invoice Date Sent - ${invoiceDate}
+    Invoice Amount - ${amountDue}
+    Due Date - ${dueDate}
+  `;
+                console.log(existingInv.clickUpTaskidCrm9);
+                await updateClickUpTask(description, existingInv.clickUpTaskidCrm9);
+                await addClickUpComment(existingInv.clickUpTaskidCrm9, "Invoice Approved.");
+                // Update Dynamo
+                await updateInvoice(existingInv.id, updates);
+            }
+        }
+        else if (amountPaid > 0) {
+            logger.info("\uD83D\uDCB0 PAYMENT RECORDED");
+            // Fetch existing invoice by invoiceId
+            const existingInv = await getInvByXeroInvoiceId(invoice.InvoiceID);
+            if (!existingInv) {
+                logger.warn(`Invoice not found in DB: ${invoice.InvoiceNumber}`);
+                return;
+            }
+            // Determine if any key fields changed (optional)
+            const lineItemsChanged = JSON.stringify(existingInv.lineItems) !== JSON.stringify(invoice.LineItems);
+            const totalsChanged = existingInv.subTotal !== invoice.SubTotal ||
+                existingInv.taxTotal !== invoice.TotalTax ||
+                existingInv.total !== invoice.Total;
+            let invoiceAction = "Payment Recorded";
+            if (lineItemsChanged || totalsChanged) {
+                invoiceAction = "Updated";
+            }
+            const invoiceDate = invoice.DateString
+                ? new Date(invoice.DateString).toISOString()
+                : existingInv.invoiceDate || new Date().toISOString();
+            const dueDate = invoice.DueDateString
+                ? new Date(invoice.DueDateString).toISOString()
+                : existingInv.dueDate || new Date().toISOString();
+            const updates = {
+                invoiceNumber: invoice.InvoiceNumber,
+                reference: invoice.Reference || "",
+                customerID: invoice.Contact?.ContactID || "",
+                customerName: invoice.Contact?.Name || "",
+                invoiceDate,
+                dueDate,
+                status: invoice.Status,
+                currencyCode: invoice.CurrencyCode || "",
+                lineItems: invoice.LineItems || [],
+                subTotal: invoice.SubTotal,
+                taxTotal: invoice.TotalTax,
+                total: invoice.Total,
+                amountPaid: invoice.AmountPaid || 0,
+                amountDue: invoice.AmountDue || 0,
+                PoNumber: existingInv.PoNumber || "",
+                invoiceAction,
+                businessUnitvalueid: existingInv.businessUnitvalueid,
+                businessUnitvalue: existingInv.businessUnitvalue,
+                clickUpTaskidCrm1: existingInv.clickUpTaskidCrm1,
+                clickUpTaskidCrm2: existingInv.clickUpTaskidCrm2,
+                clickUpTaskidCrm5: existingInv.clickUpTaskidCrm5,
+                clickUpTaskidCrm7: existingInv.clickUpTaskidCrm7,
+                clickUpTaskidCrm9: existingInv.clickUpTaskidCrm9,
+                xeroQuoteId: existingInv.xeroQuoteId || "0000",
+                createdAt: existingInv.createdAt,
+            };
+            await updateInvoice(existingInv.id, updates);
+            const description = `
+      Description:
+      Invoice Date Sent - ${updates.invoiceDate}
+      Invoice Total - ${updates.total}
+      Due Date - ${updates.dueDate}
+      `;
+            const comment = `
+      Payment Amount - ${updates.amountPaid}
+      Payment Date - ${updates.invoiceDate}
+      Balance Remaining - ${updates.amountDue}
+      `;
+            //update the task in click up
+            await updateClickUpTask(updates.clickUpTaskidCrm9, description);
+            await addClickUpComment(existingInv.clickUpTaskidCrm9, comment);
+        }
+    }
+    catch (err) {
+        console.error("Invoice handler error:", err);
     }
 }
 // const fetch = require("node-fetch");

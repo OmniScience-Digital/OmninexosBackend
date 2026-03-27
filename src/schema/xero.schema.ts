@@ -36,6 +36,7 @@ export interface Quote {
   CurrencyCode?: string;
   SubTotal?: number;
   Total?: number;
+  invNumber?: string;
   Title?: string;
   TotalDiscount?: number;
   TotalTax?: number;
@@ -81,4 +82,14 @@ export interface PurchaseOrder {
   LineItems?: any[];
   Total?: number;
   [key: string]: any; // catch-all for extra fields
+}
+
+export interface XeroQuotesResponse {
+  Quotes: Quote[];
+}
+
+export interface ClickUpTaskResponse {
+  id: string;
+  name: string;
+  [key: string]: any;
 }
