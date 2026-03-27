@@ -153,7 +153,7 @@ export async function handleQuoteStatuses(quote) {
             customerName: quote.Contact?.Name || "",
             quoteIssueDate,
             quoteExpireyDate,
-            title: quote.Title || (quote.QuoteNumber + ", " + quote.Contact?.Name + ", " + quote.Reference),
+            title: quote.Title || quote.QuoteNumber + ", " + quote.Contact?.Name + ", " + quote.Reference,
             PoNumber: "",
             quoteStatus: quote.Status || "",
             currencyCode: quote.CurrencyCode || "",

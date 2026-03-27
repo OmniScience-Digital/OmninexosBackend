@@ -68,7 +68,10 @@ export const xeroPOController = {
                 });
             }
             // Copy PO files to CRM5 and CRM7 (dedup by URL)
-            for (const targetTaskId of [existingQuote.clickUpTaskidCrm5, existingQuote.clickUpTaskidCrm7]) {
+            for (const targetTaskId of [
+                existingQuote.clickUpTaskidCrm5,
+                existingQuote.clickUpTaskidCrm7,
+            ]) {
                 if (!targetTaskId)
                     continue;
                 const targetTask = await getClickUpTask(targetTaskId);
