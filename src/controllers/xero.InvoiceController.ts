@@ -9,8 +9,7 @@ import {
   getInvByXeroInvoiceId,
   updateInvoice,
 } from '../repositories/xero.invoice.repository';
-import { updateClickUpTask } from './xero.purchaseorder.controller';
-import { addClickUpComment } from '../services/xero.quote.service';
+import { addClickUpComment, updateClickUpTaskCrm9 } from '../services/xero.quote.service';
 
 /*
 |--------------------------------------------------------------------------
@@ -374,7 +373,7 @@ async function handleInvoiceEvent(event: XeroWebhookEvent) {
     Due Date - ${dueDate}
   `;
 
-        await updateClickUpTask(existingInv.clickUpTaskidCrm9, description);
+        await updateClickUpTaskCrm9(existingInv.clickUpTaskidCrm9, description);
 
         await addClickUpComment(existingInv.clickUpTaskidCrm9, 'Invoice Approved.');
         // Update Dynamo
@@ -457,7 +456,7 @@ async function handleInvoiceEvent(event: XeroWebhookEvent) {
       `;
 
       //update the task in click up
-      await updateClickUpTask(updates.clickUpTaskidCrm9, description);
+      await updateClickUpTaskCrm9(updates.clickUpTaskidCrm9, description);
       await addClickUpComment(existingInv.clickUpTaskidCrm9, comment);
     }
   } catch (err) {

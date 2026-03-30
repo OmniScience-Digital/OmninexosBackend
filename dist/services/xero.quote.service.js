@@ -575,3 +575,23 @@ export function extractQuoteName(task) {
     const quoteName = task.name.split(",")[0].trim();
     return quoteName || null;
 }
+export async function updateClickUpTaskCrm9(taskId, description) {
+    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
+    const res = await fetch(url, {
+        method: "PUT",
+        headers: {
+            Authorization: API_TOKEN,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            description,
+        }),
+    });
+    if (!res.ok) {
+        const err = await res.text();
+        logger.error(`Failed to update ClickUp task ${taskId}: ${err}`);
+        return;
+    }
+    logger.info(`Updated ClickUp task ${taskId}`);
+    return taskId;
+}

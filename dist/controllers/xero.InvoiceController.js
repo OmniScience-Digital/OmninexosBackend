@@ -3,8 +3,7 @@ import fetch from "node-fetch";
 import logger from "../utils/logger.js";
 import { getAccessToken } from "../helper/tokens/token.helper.js";
 import { createInvoice, getInvByXeroInvoiceId, updateInvoice, } from "../repositories/xero.invoice.repository.js";
-import { updateClickUpTask } from "./xero.purchaseorder.controller.js";
-import { addClickUpComment } from "../services/xero.quote.service.js";
+import { addClickUpComment, updateClickUpTaskCrm9 } from "../services/xero.quote.service.js";
 /*
 |--------------------------------------------------------------------------
 | Controller
@@ -260,7 +259,7 @@ async function handleInvoiceEvent(event) {
     Invoice Amount - ${amountDue}
     Due Date - ${dueDate}
   `;
-                await updateClickUpTask(existingInv.clickUpTaskidCrm9, description);
+                await updateClickUpTaskCrm9(existingInv.clickUpTaskidCrm9, description);
                 await addClickUpComment(existingInv.clickUpTaskidCrm9, "Invoice Approved.");
                 // Update Dynamo
                 await updateInvoice(existingInv.id, updates);
@@ -329,7 +328,7 @@ async function handleInvoiceEvent(event) {
       Balance Remaining - ${updates.amountDue}
       `;
             //update the task in click up
-            await updateClickUpTask(updates.clickUpTaskidCrm9, description);
+            await updateClickUpTaskCrm9(updates.clickUpTaskidCrm9, description);
             await addClickUpComment(existingInv.clickUpTaskidCrm9, comment);
         }
     }

@@ -190,6 +190,7 @@ export const xeroPOController = {
   },
   invUpdate: async (req: Request, res: Response) => {
     try {
+      console.log('INV route triggered');
       const taskId = parseInspectionClickUpPayload(req.body);
       const targetTask = await getClickUpTask(taskId);
 
@@ -203,32 +204,53 @@ export const xeroPOController = {
         return res.status(404).json({ success: false, error: 'Quote not found' });
       }
 
+      // 1. Read invoice number from main task
       const invoiceNumberField = targetTask.custom_fields.find(
         (field: any) => field.name === 'Invoice Number'
       );
-      const invoiceNumber = invoiceNumberField?.value || null;
-      if (!invoiceNumber) {
-        return res.status(400).json({ success: false, error: 'Invoice number not found' });
-      }
+      const invoiceNumber = invoiceNumberField?.value?.trim() || null;
 
+      console.log('invoiceNumber ', invoiceNumber);
+
+      //  Idempotency check — if field is already cleared, this is a re-trigger, bail out silently
+      if (!invoiceNumber) {
+        logger.info(
+          `Skipping invUpdate for task ${taskId} — Invoice Number field is empty (already processed)`
+        );
+        return res.status(200).json({ success: true, message: 'Already processed, skipping' });
+      }
+      console.log('invoiceNumber continued ', invoiceNumber);
+
+      // 2. Validate invoice in Xero
       const targetInvoice = await getInvByXeroInvoiceNumber(invoiceNumber);
       if (!targetInvoice) {
-        return res.status(404).json({ success: false, error: 'Invoice not found' });
+        return res.status(404).json({ success: false, error: 'Invoice not found in Xero' });
       }
 
-      // 1. Create ClickUp task in CRM9
-      const task = await createCrm9Task(targetInvoice, existingQuote, invoiceNumber);
+      // 3. Check if subtask already exists
+      const existingSubtasks = targetTask.subtasks || [];
+      const duplicate = existingSubtasks.find((st: any) => st.name.includes(invoiceNumber));
+      if (duplicate) {
+        return res.status(200).json({ success: true, message: 'Already processed, skipping' });
+      }
 
-      // 2. Update invoice with data from quote and new task ID
-      await updateInvoiceFromQuote(targetInvoice, existingQuote, task.id);
+      // 4. Create subtask under main task for this invoice
+      const subtask = await createInvoiceSubtask(targetTask, invoiceNumber);
 
-      // 3. Update quote with the new task ID
-      await updateQuoteWithTaskId(existingQuote, task.id);
+      // 5. Create CRM9 task for this invoice
+      const crm9Task = await createCrm9Task(targetInvoice, existingQuote, invoiceNumber);
 
-      return res.status(200).json({ success: true });
+      // 6. Update invoice with quote + CRM9 task ID
+      await updateInvoiceFromQuote(targetInvoice, existingQuote, crm9Task.id);
+
+      // 7. Clear main task invoice field after success
+      const invoiceFieldId = invoiceNumberField.id;
+      await clearInvoiceNumberField(targetTask.id, invoiceFieldId);
+
+      return res.status(200).json({ success: true, message: 'Invoice processed successfully' });
     } catch (error: any) {
       logger.error('Error in invUpdate:', error);
-      return res.status(500).json({
+      return res.status(200).json({
         success: false,
         error: error.message || 'Unknown error',
       });
@@ -236,7 +258,7 @@ export const xeroPOController = {
   },
 };
 
-// Parse task ID from webhook payload
+//1. Parse task ID from webhook payload
 function parseInspectionClickUpPayload(clickupPayload: any): string {
   try {
     return clickupPayload.payload.id;
@@ -246,7 +268,7 @@ function parseInspectionClickUpPayload(clickupPayload: any): string {
   }
 }
 
-// Extract Purchase Order Number from custom fields
+//2. Extract Purchase Order Number from custom fields
 function extractPurchaseOrderNumber(task: any): string | null {
   const t = task.task || task;
   const customFields = t.custom_fields || [];
@@ -260,6 +282,7 @@ function extractPurchaseOrderNumber(task: any): string | null {
   return null;
 }
 
+//3. create task in crm9
 async function createClickUpTask(
   description: string,
   topic: string,
@@ -288,7 +311,7 @@ async function createClickUpTask(
   return (await res.json()) as ClickUpTaskResponse;
 }
 
-// Helper function to create the CRM9 ClickUp task
+//4. Helper function to create the CRM9 ClickUp task
 async function createCrm9Task(invoice: any, quote: any, invoiceNumber: string) {
   const linktoCrm07 = `https://app.clickup.com/t/${quote.clickUpTaskidCrm7}`;
   const topic = `${invoiceNumber} ,${quote.quoteNumber} ,${invoice.customerName}`;
@@ -316,7 +339,7 @@ async function createCrm9Task(invoice: any, quote: any, invoiceNumber: string) {
   return task;
 }
 
-// Helper function to update the invoice with fields from the quote and the new task ID
+//5. Helper function to update the invoice with fields from the quote and the new task ID
 
 async function updateInvoiceFromQuote(invoice: any, quote: any, newTaskId: string) {
   // Build updates object without updatedAt (let updateInvoice handle it)
@@ -351,37 +374,63 @@ async function updateInvoiceFromQuote(invoice: any, quote: any, newTaskId: strin
   };
 
   await updateInvoice(invoice.id, updates);
-  logger.info('✅ Invoice updated with quote fields:', updates);
-}
-async function updateQuoteWithTaskId(quote: any, newTaskId: string) {
-  // Follow the same pattern: update only the field that changes
-  const updates = {
-    clickUpTaskidCrm9: newTaskId,
-  };
-  await updateQuote(quote.id, updates);
-  logger.info('✅ Quote updated with CRM9 task ID:', newTaskId);
+  logger.info('✅ Invoice updated with quote fields:');
 }
 
-export async function updateClickUpTask(taskId: string, description: string) {
-  const url = `https://api.clickup.com/api/v2/task/${taskId}`;
-
-  const res = await fetch(url, {
-    method: 'PUT',
+// 6. Create subtask under main task for this invoice
+async function createInvoiceSubtask(parentTask: any, invoiceNumber: string) {
+  const res = await fetch(`https://api.clickup.com/api/v2/list/${parentTask.list.id}/task`, {
+    method: 'POST',
     headers: {
       Authorization: API_TOKEN,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      description,
+      name: `Invoice: ${invoiceNumber}`,
+      description: parentTask.description || `Subtask for invoice ${invoiceNumber}`,
+      parent: parentTask.id,
+      status: parentTask.status?.status || 'to do',
+      priority: parentTask.priority?.id || null,
+      due_date: parentTask.due_date || null,
+      due_date_time: parentTask.due_date_time || false,
+      assignees: parentTask.assignees?.map((a: any) => a.id) || [],
+      tags: parentTask.tags?.map((t: any) => t.name) || [],
+      custom_fields:
+        parentTask.custom_fields
+          ?.filter((f: any) => f.value !== null && f.value !== undefined && f.value !== '')
+          .map((f: any) => ({
+            id: f.id,
+            value: f.value,
+          })) || [],
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    logger.error(`Failed to update ClickUp task ${taskId}: ${err}`);
-    return;
+    logger.error(`Failed to create subtask for invoice ${invoiceNumber}: ${err}`);
+    throw new Error('Failed to create invoice subtask');
   }
 
-  logger.info(`Updated ClickUp task ${taskId}`);
-  return taskId;
+  const task = await res.json();
+  logger.info(`Created subtask ${task.id} for invoice ${invoiceNumber}`);
+  return task;
+}
+
+// 7. Clear the Invoice Number field on the main task
+async function clearInvoiceNumberField(taskId: string, fieldId: string) {
+  const res = await fetch(`https://api.clickup.com/api/v2/task/${taskId}/field/${fieldId}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: API_TOKEN,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    logger.error(`Failed to clear invoice number field on task ${taskId}: ${err}`);
+    throw new Error('Failed to clear main task invoice field');
+  }
+
+  logger.info(`Cleared Invoice Number field on task ${taskId}`);
 }
