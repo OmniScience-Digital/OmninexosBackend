@@ -7,9 +7,9 @@ services:
     environment:
       - NODE_ENV=development
       - REDIS_HOST=redis
+    restart: unless-stopped
     depends_on:
       - redis
-    restart: unless-stopped
     command: ["node", "dist/server.js"]
     working_dir: /src
 
@@ -18,8 +18,3 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
-
-
-
-
-
