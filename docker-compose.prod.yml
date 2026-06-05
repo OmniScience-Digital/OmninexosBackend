@@ -5,11 +5,11 @@ services:
       - "5001:5001"
     env_file: .env
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - REDIS_HOST=redis
+    restart: always
     depends_on:
       - redis
-    restart: unless-stopped
     command: ["node", "dist/server.js"]
     working_dir: /src
 
@@ -17,4 +17,6 @@ services:
     image: redis:latest
     ports:
       - "6379:6379"
-    restart: unless-stopped
+    restart: always
+
+

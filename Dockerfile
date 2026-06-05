@@ -7,7 +7,7 @@ RUN npm install
 
 COPY . .
 
-RUN npm run build && cp -r src/assets dist/assets
+RUN npm run build
 
 EXPOSE 5001
 
