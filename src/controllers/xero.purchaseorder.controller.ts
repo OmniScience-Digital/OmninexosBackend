@@ -210,8 +210,6 @@ export const xeroPOController = {
       );
       const invoiceNumber = invoiceNumberField?.value?.trim() || null;
 
-      console.log('invoiceNumber ', invoiceNumber);
-
       //  Idempotency check — if field is already cleared, this is a re-trigger, bail out silently
       if (!invoiceNumber) {
         logger.info(
@@ -219,7 +217,6 @@ export const xeroPOController = {
         );
         return res.status(200).json({ success: true, message: 'Already processed, skipping' });
       }
-      console.log('invoiceNumber continued ', invoiceNumber);
 
       // 2. Validate invoice in Xero
       const targetInvoice = await getInvByXeroInvoiceNumber(invoiceNumber);

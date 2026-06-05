@@ -7,7 +7,7 @@ import { createQuote, updateQuote, getQuoteByNumber, } from "../repositories/dyn
 import telegramService from "./telegram.service.js";
 const TENANT_ID = process.env.XERO_TENANT_ID;
 const API_TOKEN = process.env.CLICKUP_API_TOKEN;
-const Xero_Url = `https://go.xero.com/app/!97lqx/quotes/`;
+const Xero_Url = process.env.Xero_Url;
 const CUSTOMER_FIELD_ID = "b1b8b307-162d-46b6-8dbb-6e995d1130bc";
 const PO_NUMBER_FIELD_ID = "7830276e-f1bb-4efc-8e87-e34693cbd712";
 const BUSINESS_UNIT_FIELD_ID = "fdf29394-d070-4384-863c-9f2f5885061f";

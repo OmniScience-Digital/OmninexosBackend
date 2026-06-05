@@ -170,13 +170,11 @@ export const xeroPOController = {
             // 1. Read invoice number from main task
             const invoiceNumberField = targetTask.custom_fields.find((field) => field.name === "Invoice Number");
             const invoiceNumber = invoiceNumberField?.value?.trim() || null;
-            console.log("invoiceNumber ", invoiceNumber);
             //  Idempotency check — if field is already cleared, this is a re-trigger, bail out silently
             if (!invoiceNumber) {
                 logger.info(`Skipping invUpdate for task ${taskId} — Invoice Number field is empty (already processed)`);
                 return res.status(200).json({ success: true, message: "Already processed, skipping" });
             }
-            console.log("invoiceNumber continued ", invoiceNumber);
             // 2. Validate invoice in Xero
             const targetInvoice = await getInvByXeroInvoiceNumber(invoiceNumber);
             if (!targetInvoice) {
