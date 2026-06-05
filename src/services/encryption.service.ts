@@ -1,6 +1,12 @@
 import crypto from 'crypto';
 
-const key = Buffer.from(process.env.ENCRYPTION_KEY!, 'hex'); // 32 bytes hex key
+const rawKey = process.env.ENCRYPTION_KEY;
+
+if (!rawKey) {
+  throw new Error('ENCRYPTION_KEY is missing in environment variables');
+}
+
+const key = Buffer.from(rawKey, 'hex');
 
 export const encrypt = (text: string): string => {
   const iv = crypto.randomBytes(16);
