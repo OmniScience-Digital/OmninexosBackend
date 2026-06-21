@@ -57,9 +57,9 @@ import { addQuoteJob } from '../../queues/quotes.queue';
   await addQuoteJob();
 })();
 
-import { addPurchaseJob } from '../../queues/purchases.queue';
+// import { addPurchaseJob } from '../../queues/purchases.queue';
 
-(async () => {
-  logger.info('🕒 Starting purchase cron...');
-  await addPurchaseJob();
-})();
+// (async () => {
+//   logger.info('🕒 Starting purchase cron...');
+//   await addPurchaseJob();
+// })();

@@ -42,8 +42,8 @@ import { addQuoteJob } from "../../queues/quotes.queue.js";
     logger.info("\uD83D\uDD52 Starting quote cron...");
     await addQuoteJob();
 })();
-import { addPurchaseJob } from "../../queues/purchases.queue.js";
-(async () => {
-    logger.info("\uD83D\uDD52 Starting purchase cron...");
-    await addPurchaseJob();
-})();
+// import { addPurchaseJob } from '../../queues/purchases.queue';
+// (async () => {
+//   logger.info('🕒 Starting purchase cron...');
+//   await addPurchaseJob();
+// })();

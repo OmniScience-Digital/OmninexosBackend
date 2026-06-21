@@ -5,6 +5,7 @@ import logger from "../utils/logger.js";
 import { getXeroConfig, updateXeroConfig } from "../repositories/dynamo.xeroconfig.repository.js";
 import { createQuote, updateQuote, getQuoteByNumber, } from "../repositories/dynamo.quote.repository.js";
 import telegramService from "./telegram.service.js";
+import { syncQuoteToCrmShaughn } from "./xero.crmshaughn.service";
 const TENANT_ID = process.env.XERO_TENANT_ID;
 const API_TOKEN = process.env.CLICKUP_API_TOKEN;
 const Xero_Url = process.env.Xero_Url;
@@ -58,7 +59,8 @@ export async function pollQuotes() {
             const rawTimestamp = quote.UpdatedDateUTC.replace(/\/Date\((\d+)\)\//, "$1");
             const updatedISO = new Date(parseInt(rawTimestamp)).toISOString();
             if (!lastUpdatedDateUTC || new Date(updatedISO) > new Date(lastUpdatedDateUTC)) {
-                await handleQuoteStatuses(quote);
+                // await handleQuoteStatuses(quote);
+                await syncQuoteToCrmShaughn(quote);
             }
         }
         // Update lastUpdatedDateUTC to newest record (keep in UTC for comparison)

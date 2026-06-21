@@ -10,6 +10,7 @@ import {
   getQuoteByNumber,
 } from '../repositories/dynamo.quote.repository';
 import telegramService from './telegram.service';
+import { syncQuoteToCrmShaughn } from './xero.crmshaughn.service';
 
 const TENANT_ID = process.env.XERO_TENANT_ID!;
 const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
@@ -80,7 +81,8 @@ export async function pollQuotes() {
       const rawTimestamp = quote.UpdatedDateUTC.replace(/\/Date\((\d+)\)\//, '$1');
       const updatedISO = new Date(parseInt(rawTimestamp)).toISOString();
       if (!lastUpdatedDateUTC || new Date(updatedISO) > new Date(lastUpdatedDateUTC)) {
-        await handleQuoteStatuses(quote);
+        // await handleQuoteStatuses(quote);
+        await syncQuoteToCrmShaughn(quote);
       }
     }
 

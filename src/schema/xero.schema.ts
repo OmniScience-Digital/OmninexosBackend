@@ -56,7 +56,7 @@ export interface XeroWebhookEvent {
   resourceId: string;
   tenantId: string;
   tenantType: 'ORGANISATION' | string;
-  eventCategory: 'INVOICE' | 'CONTACT' | 'SUBSCRIPTION' | string;
+  eventCategory: 'INVOICE' | 'CONTACT' | 'SUBSCRIPTION' | 'QUOTE' | string;
   eventType: 'CREATE' | 'UPDATE' | 'DELETE';
   eventDateUtc: string;
 }
