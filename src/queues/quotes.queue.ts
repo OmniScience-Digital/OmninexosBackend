@@ -14,6 +14,6 @@ export async function addQuoteJob() {
   await quoteQueue.add(
     'poll-quotes',
     {},
-    { repeat: { every: 60_000 } } // repeat every 180 seconds
+    { repeat: { every: 180_000 } } // repeat every 180 seconds
   );
 }
