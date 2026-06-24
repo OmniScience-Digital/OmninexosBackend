@@ -72,7 +72,7 @@ export async function pollQuotes() {
       console.log('No quotes found.');
       return;
     }
-    logger.info(`✅ Total Purchase Orders Retrieved: ${allQuotes.length}`);
+    logger.info(`✅ Total Quotes  Retrieved: ${allQuotes.length}`);
     logger.info('Last Sync Used:', lastUpdatedDateUTC);
     // console.log('Quote ',allQuotes);
     logger.info('--------------------------------------------');

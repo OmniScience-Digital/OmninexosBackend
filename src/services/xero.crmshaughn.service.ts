@@ -12,6 +12,8 @@ const CRM_SHAUGHN_LIST_ID = process.env.CRM_SHAUGHN_LIST_ID!;
 const Xero_Url = process.env.Xero_Url!;
 
 const CUSTOMER_FIELD_ID = 'b1b8b307-162d-46b6-8dbb-6e995d1130bc';
+const VALUE_FIELD_ID = 'a515d39a-2f1e-4b1e-8279-21e6007b7912';
+const QUOTE_NUMBER_FIELD_ID = '2bc85e1d-b40a-44eb-ad3f-2875e582dc51';
 
 // ─── Status constants (must match the CRM-Shaughn list exactly) ───────────────
 const STATUS_QUOTED = 'quoted';
@@ -52,6 +54,18 @@ export async function syncQuoteToCrmShaughn(quote: Quote) {
     } else {
       logger.info(`[CRM Shaughn] No changes for quote ${quote.QuoteNumber}`);
       return { skipped: true, quoteNumber: quote.QuoteNumber };
+    }
+  } else {
+    switch (quote.Status) {
+      case 'SENT':
+        action = 'Sent';
+        break;
+      case 'ACCEPTED':
+        action = 'Accepted';
+        break;
+      default:
+        action = 'Created';
+        break;
     }
   }
 
@@ -214,7 +228,11 @@ ${totalsText}
   const description = baseDescription.replace(/\n\n\n+/g, '\n\n');
 
   // ── Custom fields — spec: Customer Name + Value (Subtotal) + Quote Number ─
-  const customFields = [{ id: CUSTOMER_FIELD_ID, value: quote.customerName }];
+  const customFields = [
+    { id: CUSTOMER_FIELD_ID, value: quote.customerName },
+    { id: VALUE_FIELD_ID, value: quote.subTotal },
+    { id: QUOTE_NUMBER_FIELD_ID, value: quote.quoteNumber },
+  ];
 
   // ── Comment per trigger ───────────────────────────────────────────────────
   const commentMap: Record<string, string> = {
