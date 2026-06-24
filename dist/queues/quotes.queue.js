@@ -9,6 +9,6 @@ export async function addQuoteJob() {
         }
     }
     // Add a job to poll quotes, can repeat every 3 min
-    await quoteQueue.add("poll-quotes", {}, { repeat: { every: 60000 } } // repeat every 180 seconds
+    await quoteQueue.add("poll-quotes", {}, { repeat: { every: 180000 } } // repeat every 180 seconds
     );
 }

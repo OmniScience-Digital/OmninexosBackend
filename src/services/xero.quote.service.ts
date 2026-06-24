@@ -49,7 +49,6 @@ export async function pollQuotes() {
         return;
       }
 
-
       if (res.status === 429) {
         logger.warn('[Xero] Rate limit hit, skipping this poll cycle');
         return;
