@@ -19,6 +19,7 @@ const QUOTE_NUMBER_FIELD_ID = '2bc85e1d-b40a-44eb-ad3f-2875e582dc51';
 const STATUS_QUOTED = 'quoted';
 const STATUS_SENT = 'sent';
 const STATUS_ACCEPTED = 'accepted';
+const STATUS_DECLINED = 'declined';
 
 export async function syncQuoteToCrmShaughn(quote: Quote) {
   const existingQuote = await getQuoteByNumber(quote.QuoteNumber);
@@ -31,7 +32,7 @@ export async function syncQuoteToCrmShaughn(quote: Quote) {
     ? new Date(quote.ExpiryDateString).toISOString()
     : new Date().toISOString();
 
-  let action: 'Created' | 'Updated' | 'Sent' | 'Revised' | 'Accepted' = 'Created';
+  let action: 'Created' | 'Updated' | 'Sent' | 'Revised' | 'Accepted' | 'Declined' = 'Created';
 
   if (existingQuote) {
     const lineItemsChanged =
@@ -46,6 +47,8 @@ export async function syncQuoteToCrmShaughn(quote: Quote) {
         action = existingQuote.quoteStatus === 'SENT' ? 'Revised' : 'Sent';
       } else if (quote.Status === 'ACCEPTED') {
         action = 'Accepted';
+      } else if (quote.Status === 'DECLINED') {
+        action = 'Declined';
       } else {
         action = 'Updated';
       }
@@ -62,6 +65,9 @@ export async function syncQuoteToCrmShaughn(quote: Quote) {
         break;
       case 'ACCEPTED':
         action = 'Accepted';
+        break;
+      case 'DECLINED':
+        action = 'Declined';
         break;
       default:
         action = 'Created';
@@ -130,14 +136,13 @@ async function handleCrmShaughnTask(quote: any, action: string) {
     quote.clickUpTaskidCrmShaughn,
     payload.topic,
     payload.description,
-    payload.status
+    payload.status,
+    payload.customFields
   );
   if (payload.comment) await addClickUpComment(quote.clickUpTaskidCrmShaughn, payload.comment);
   logger.info(`[CRM Shaughn] Updated task ${quote.clickUpTaskidCrmShaughn} (${action})`);
 }
 
-// ─── Payload builder ──────────────────────────────────────────────────────────
-// Spec reference: Current_CRM_Scope_Rev_0.pdf — "Trigger / Backend CRM-Shaughn" table
 function buildShaughnPayload(action: string, quote: any) {
   const topic = `${quote.quoteNumber}, ${quote.customerName}, ${quote.title}`;
 
@@ -147,10 +152,6 @@ function buildShaughnPayload(action: string, quote: any) {
   const now = Date.now();
   const DAY_MS = 24 * 60 * 60 * 1000;
 
-  // ── Status & due date per action (spec) ──────────────────────────────────
-  //  Created / Updated  → status: QUOTED,    due: now + 2 days
-  //  Sent    / Revised  → status: SENT,      due: ExpiryDate
-  //  Accepted           → status: ACCEPTED,  due: now + 14 days
   let status: string;
   let due_date: number;
 
@@ -164,6 +165,10 @@ function buildShaughnPayload(action: string, quote: any) {
       status = STATUS_ACCEPTED;
       due_date = now + 14 * DAY_MS;
       break;
+    case 'Declined':
+      status = STATUS_DECLINED;
+      due_date = now;
+      break;
     case 'Created':
     case 'Updated':
     default:
@@ -172,7 +177,6 @@ function buildShaughnPayload(action: string, quote: any) {
       break;
   }
 
-  // ── Line items — spec uses detailed view for all except Accepted ──────────
   const detailedItems = (quote.lineItems || [])
     .map((item: any, index: number) => {
       const taxRate =
@@ -189,7 +193,6 @@ function buildShaughnPayload(action: string, quote: any) {
     })
     .join('\n\n');
 
-  // Accepted uses simplified items (description + quantity only per spec)
   const simpleItems = (quote.lineItems || [])
     .map(
       (item: any, index: number) =>
@@ -202,7 +205,6 @@ function buildShaughnPayload(action: string, quote: any) {
   const isAccepted = action === 'Accepted';
   const quoteItemsText = isAccepted ? simpleItems : detailedItems;
 
-  // ── Totals block — spec omits unit-level tax on Accepted but keeps totals ─
   const totalsText = isAccepted
     ? `Quote Subtotal: ${quote.subTotal}
 Quote Discount: ${quote.totalDiscount || 0}`
@@ -212,8 +214,28 @@ Quote Discount: ${quote.totalDiscount || 0}
 Quote Tax: ${quote.taxTotal}
 Quote Total: ${quote.quTotal}`;
 
-  // ── Description layout (matches spec for every trigger row) ──────────────
-  const baseDescription = `Description:
+  const header = `Customer: ${quote.customerName}
+Value: ${quote.subTotal}
+Quote Number: ${quote.quoteNumber}`;
+
+  const baseDescription = isAccepted
+    ? `${header}
+
+Description:
+Scope of Work - ${quote.title}
+Quote Status - ${quote.quoteStatus}
+Quote Expiry - ${quote.quoteExpireyDate}
+
+Quote Link - ${quoteUrl}
+
+Quote Items:
+${quoteItemsText}
+
+${totalsText}
+`
+    : `${header}
+
+Description:
 Scope of Work - ${quote.title}
 Quote Status - ${quote.quoteStatus}
 Quote Expiry - ${quote.quoteExpireyDate}
@@ -225,22 +247,22 @@ ${quoteItemsText}
 
 ${totalsText}
 `;
+
   const description = baseDescription.replace(/\n\n\n+/g, '\n\n');
 
-  // ── Custom fields — spec: Customer Name + Value (Subtotal) + Quote Number ─
   const customFields = [
     { id: CUSTOMER_FIELD_ID, value: quote.customerName },
-    { id: VALUE_FIELD_ID, value: quote.subTotal },
+    { id: VALUE_FIELD_ID, value: String(quote.subTotal) },
     { id: QUOTE_NUMBER_FIELD_ID, value: quote.quoteNumber },
   ];
 
-  // ── Comment per trigger ───────────────────────────────────────────────────
   const commentMap: Record<string, string> = {
     Created: 'Quote Created',
     Updated: 'Quote Updated',
     Sent: 'Quote Updated & Sent',
     Revised: 'Quote Revised',
     Accepted: 'Quote Accepted',
+    Declined: 'Quote Declined',
   };
   const comment = commentMap[action] ?? '';
 
@@ -293,7 +315,8 @@ async function updateClickUpTask(
   taskId: string,
   topic: string,
   description: string,
-  status: string
+  status: string,
+  customFields: any[]
 ) {
   const res = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
     method: 'PUT',
@@ -301,7 +324,7 @@ async function updateClickUpTask(
       Authorization: API_TOKEN,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ name: topic, description, status }),
+    body: JSON.stringify({ name: topic, description, status, custom_fields: customFields }),
   });
 
   if (!res.ok) {
