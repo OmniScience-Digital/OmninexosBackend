@@ -39,7 +39,9 @@ export async function pollQuotes() {
                 return;
             }
             if (!res.ok) {
-                throw new Error(`Failed to fetch quotes: ${res.statusText}`);
+                const errBody = await res.text();
+                logger.error(`[Xero] Failed to fetch quotes (${res.status} ${res.statusText}): ${errBody}`);
+                throw new Error(`Failed to fetch quotes: ${res.status} ${res.statusText}`);
             }
             const data = (await res.json());
             if (!data.Quotes || data.Quotes.length === 0) {
