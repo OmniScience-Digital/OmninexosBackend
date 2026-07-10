@@ -17,6 +17,8 @@ export async function pollQuotes() {
         const config = await getXeroConfig(TENANT_ID);
         let lastUpdatedDateUTC = config?.quotesLastSyncUTC ?? null;
         const ACCESS_TOKEN = await getAccessToken();
+        const payload = JSON.parse(Buffer.from(ACCESS_TOKEN.split(".")[1], "base64url").toString());
+        logger.info(`[Xero] Token scopes: ${payload.scope}`);
         const headers = {
             Authorization: `Bearer ${ACCESS_TOKEN}`,
             "xero-tenant-id": TENANT_ID,
