@@ -1,5 +1,10 @@
 import 'dotenv/config';
-import { UpdateItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import {
+  UpdateItemCommand,
+  PutItemCommand,
+  QueryCommand,
+  ConditionalCheckFailedException,
+} from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { dynamoClient } from '../services/dynamo.service';
 import logger from '../utils/logger';
@@ -24,13 +29,30 @@ export const getXeroConfig = async (tenantId: string) => {
   return unmarshall(result.Items[0]);
 };
 
+/**
+ * Thrown when a conditional (compare-and-swap) update loses a race — i.e.
+ * someone else already changed refreshTokenEncrypted since we read it.
+ * Callers should re-read the config and retry rather than treat this as fatal.
+ */
+export class XeroConfigConditionFailedError extends Error {
+  constructor() {
+    super('Xero config was modified by another process before this update could apply');
+    this.name = 'XeroConfigConditionFailedError';
+  }
+}
+
 export const updateXeroConfig = async (
   tenantId: string,
   updates: {
     quotesLastSyncUTC?: string;
     purchasesLastSyncUTC?: string;
     refreshTokenEncrypted?: string;
-  }
+  },
+  // If provided, the write only applies when refreshTokenEncrypted in the DB
+  // still equals this value at write time (compare-and-swap). Pass the value
+  // you originally read before calling Xero. Throws XeroConfigConditionFailedError
+  // if someone else already rotated it out from under you.
+  expectedCurrentRefreshTokenEncrypted?: string
 ) => {
   // --- Query by secondary index to check existence ---
   const existingQuery = await dynamoClient.send(
@@ -92,14 +114,34 @@ export const updateXeroConfig = async (
     throw new Error('No fields provided to update');
   }
 
+  // --- Compare-and-swap guard ---
+  // Only relevant when this update is rotating the refresh token: make sure
+  // nobody else has already changed it since we read it.
+  let conditionExpression: string | undefined;
+  if (expectedCurrentRefreshTokenEncrypted !== undefined) {
+    conditionExpression = 'refreshTokenEncrypted = :expectedToken';
+    values[':expectedToken'] = expectedCurrentRefreshTokenEncrypted;
+  }
+
   const params = {
     TableName: CONFIG_TABLE,
     Key: marshall({ id: existingItem.id }),
     UpdateExpression: `SET ${updateExpressions.join(', ')}`,
     ExpressionAttributeValues: marshall(values),
+    ...(conditionExpression ? { ConditionExpression: conditionExpression } : {}),
     ReturnValues: 'ALL_NEW' as const,
   };
 
-  const result = await dynamoClient.send(new UpdateItemCommand(params));
-  return result.Attributes ? unmarshall(result.Attributes) : null;
+  try {
+    const result = await dynamoClient.send(new UpdateItemCommand(params));
+    return result.Attributes ? unmarshall(result.Attributes) : null;
+  } catch (err) {
+    if (err instanceof ConditionalCheckFailedException) {
+      logger.warn(
+        `[XeroConfig] Conditional update lost a race for tenant ${tenantId} — refreshTokenEncrypted changed since it was read.`
+      );
+      throw new XeroConfigConditionFailedError();
+    }
+    throw err;
+  }
 };

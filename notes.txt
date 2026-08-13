@@ -11,3 +11,6 @@ use this for shoughn ,await syncQuoteToCrmShaughn(quote);
 
 bullmq abnomalitioes ,
 redis-cli KEYS "bull:quote-polling:*" | xargs redis-cli DEL
+
+
+zip -r OmninexosBackendServer.zip . -x "node_modules/*" ".git/*" "dist/*" "*.DS_Store"
