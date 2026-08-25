@@ -8,7 +8,16 @@ export const xeroController = {
         try {
             const url = xeroService.getAuthUrl();
             logger.info("Redirecting user to Xero login");
-            res.send(`<a href="${url}">Connect to Xero</a>`);
+            // Explicitly prevent any caching of this response (browser, proxy, or
+            // API Gateway/CDN in front of the app). Previously this returned a
+            // static HTML link via res.send(), which Express auto-ETags — since
+            // the link never changes, repeat visits could get served a cached
+            // 304 with no body, silently preventing the redirect from ever
+            // reaching Xero.
+            res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+            res.set("Pragma", "no-cache");
+            res.set("Expires", "0");
+            res.redirect(url);
         }
         catch (error) {
             logger.error("Error generating Xero auth URL", error);
