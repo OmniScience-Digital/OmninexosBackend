@@ -1,8 +1,7 @@
 import crypto from "crypto";
 import logger from "../utils/logger.js";
 import { getAccessToken } from "../helper/tokens/token.helper.js";
-// import { handleQuoteStatuses } from '../services/xero.quote.service';
-import { syncQuoteToCrmShaughn } from "../services/xero.crmshaughn.service";
+import { handleQuoteStatuses } from "../services/xero.quote.service.js";
 const TENANT_ID = process.env.XERO_TENANT_ID;
 /**
  * Xero QUOTE webhook receiver.
@@ -89,10 +88,7 @@ async function handleQuoteEvent(event) {
             return;
         }
         // Drive both pipelines independently — see module docstring.
-        const results = await Promise.allSettled([
-            // handleQuoteStatuses(quote),
-            syncQuoteToCrmShaughn(quote),
-        ]);
+        const results = await Promise.allSettled([handleQuoteStatuses(quote)]);
         results.forEach((result, idx) => {
             const pipeline = idx === 0 ? "full pipeline" : "CRM Shaughn";
             if (result.status === "rejected") {

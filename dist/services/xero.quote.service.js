@@ -4,14 +4,78 @@ import { getAccessToken } from "../helper/tokens/token.helper.js";
 import logger from "../utils/logger.js";
 import { getXeroConfig, updateXeroConfig } from "../repositories/dynamo.xeroconfig.repository.js";
 import { createQuote, updateQuote, getQuoteByNumber, } from "../repositories/dynamo.quote.repository.js";
-import telegramService from "./telegram.service.js";
-import { syncQuoteToCrmShaughn } from "./xero.crmshaughn.service";
 const TENANT_ID = process.env.XERO_TENANT_ID;
 const API_TOKEN = process.env.CLICKUP_API_TOKEN;
 const Xero_Url = process.env.Xero_Url;
 const CUSTOMER_FIELD_ID = "b1b8b307-162d-46b6-8dbb-6e995d1130bc";
 const PO_NUMBER_FIELD_ID = "7830276e-f1bb-4efc-8e87-e34693cbd712";
 const BUSINESS_UNIT_FIELD_ID = "fdf29394-d070-4384-863c-9f2f5885061f";
+// Task Relationship custom fields - link a task back to CRM-01/02/33, per diagram.
+const CRM01_LINK_FIELD_ID = "c6985922-9163-4b5e-ae07-68cb430c1e20";
+const CRM02_LINK_FIELD_ID = "8e729043-bea0-46b1-8f5c-3eddb5dc4cc3";
+const CRM33_LINK_FIELD_ID = "f5742565-963a-4ab7-b74d-63c7b12b795d";
+// Builds a ClickUp URL custom field entry, or null if there's no task to link yet
+// (e.g. CRM-01 not created yet) - null entries get filtered out.
+// Confirmed via FIELD_010 "Value is not a valid URL": these are plain URL fields,
+// not Task Relationship fields - so we send the task's URL as a string.
+function taskLinkField(fieldId, taskId) {
+    if (!taskId)
+        return null;
+    return { id: fieldId, value: `https://app.clickup.com/t/${taskId}` };
+}
+// New job-card lists (replaces the old single CRM5 list). One of these four is chosen
+// on Accepted based on: PO = "#INTPO..." (internal PO) -> CRM-051, otherwise -> CRM-050,
+// then split again by Business Unit (Global / Services).
+const CRM050_GLOBAL_LIST_ID = process.env.CRM050_GLOBAL_LIST_ID;
+const CRM050_SERVICES_LIST_ID = process.env.CRM050_SERVICES_LIST_ID;
+const CRM051_GLOBAL_LIST_ID = process.env.CRM051_GLOBAL_LIST_ID;
+const CRM051_SERVICES_LIST_ID = process.env.CRM051_SERVICES_LIST_ID;
+// crm-033-999-declined-aka-cold-storage and crm-032-999-quote-lost-job-card-group
+// are single lists each (not split by Business Unit).
+const CRM033_LIST_ID = process.env.CRM033_LIST_ID;
+const CRM032_LIST_ID = process.env.CRM032_LIST_ID;
+// Internal PO syntax example: #INTPO-SF-260819-02C, #INTPO-GD-260820-03T
+const INTERNAL_PO_PREFIX = "#INTPO";
+// Same Business Unit option IDs used in xero.businessUnit.controller.ts.
+// That controller guarantees businessUnitvalueid is always one of these two
+// once it has run - but a quote can reach ClickUp task creation *before*
+// the Business Unit webhook has ever fired (businessUnitvalueid === '').
+// ClickUp rejects an empty string for a dropdown field (FIELD_011), so we
+// must always send a valid option id - default to Services, same as
+// xeroBusinessUnitController does.
+const GLOBAL_BUSINESS_UNIT_ID = "f0dec408-0e75-4248-aed4-282b2ca74fce"; // Global
+const SERVICES_BUSINESS_UNIT_ID = "a6ce6bb6-123f-4c9d-b964-dfdb6d4e95ad"; // Services (default)
+function safeBusinessUnitId(quote) {
+    return quote?.businessUnitvalueid || SERVICES_BUSINESS_UNIT_ID;
+}
+// Maps each of the 4 job-card branches to its ClickUp list and its exact DB field name
+// (must match the Quote model in the Amplify schema, data-resource.ts, field-for-field).
+const JOB_CARD_BRANCHES = {
+    CRM050_GLOBAL: { listId: CRM050_GLOBAL_LIST_ID, dbField: "clickUpTaskidCRM050_Global" },
+    CRM050_SERVICES: { listId: CRM050_SERVICES_LIST_ID, dbField: "clickUpTaskidCRM050_SERVICES" },
+    CRM051_GLOBAL: { listId: CRM051_GLOBAL_LIST_ID, dbField: "clickUpTaskidCRM051_GLOBAL" },
+    CRM051_SERVICES: { listId: CRM051_SERVICES_LIST_ID, dbField: "clickUpTaskidCRM051_SERVICES" },
+};
+/**
+ * Picks which of the 4 job-card branches (and therefore which DB field / ClickUp list)
+ * a new job card should use.
+ *
+ * NOTE: at the moment a quote is Accepted, quote.PoNumber is normally still empty -
+ * it only gets filled in later, once sales manually enters it on CRM-02 (see
+ * xero.purchaseorder.controller.ts / poUpdate). Until that's resolved with Shaughn,
+ * an empty PO number will fall through to the "not internal" (CRM-050) branch below.
+ */
+function resolveJobCardBranch(quote) {
+    const poNumber = (quote?.PoNumber || "").toString().trim().toUpperCase();
+    const isInternalPO = poNumber.startsWith(INTERNAL_PO_PREFIX);
+    // Business Unit is set via xeroBusinessUnitController, which always resolves to
+    // Global or Services (defaulting to Services) - so we compare by ID, not name.
+    const isGlobal = quote?.businessUnitvalueid === GLOBAL_BUSINESS_UNIT_ID;
+    if (isInternalPO) {
+        return isGlobal ? "CRM051_GLOBAL" : "CRM051_SERVICES";
+    }
+    return isGlobal ? "CRM050_GLOBAL" : "CRM050_SERVICES";
+}
 export async function pollQuotes() {
     try {
         const config = await getXeroConfig(TENANT_ID);
@@ -67,8 +131,7 @@ export async function pollQuotes() {
             const rawTimestamp = quote.UpdatedDateUTC.replace(/\/Date\((\d+)\)\//, "$1");
             const updatedISO = new Date(parseInt(rawTimestamp)).toISOString();
             if (!lastUpdatedDateUTC || new Date(updatedISO) > new Date(lastUpdatedDateUTC)) {
-                // await handleQuoteStatuses(quote);
-                await syncQuoteToCrmShaughn(quote);
+                await handleQuoteStatuses(quote);
             }
         }
         // Update lastUpdatedDateUTC to newest record (keep in UTC for comparison)
@@ -101,9 +164,23 @@ export async function handleQuoteStatuses(quote) {
             existingQuote.taxTotal !== quote.TotalTax ||
             existingQuote.quTotal !== quote.Total;
         if (quote.Status !== existingQuote.quoteStatus) {
+            const prevStatus = existingQuote.quoteStatus;
+            logger.info(`Quote ${quote.QuoteNumber} status change detected: ${prevStatus} -> ${quote.Status}`);
             switch (quote.Status) {
                 case "SENT":
-                    quoteAction = "Sent";
+                    if (prevStatus === "DECLINED") {
+                        // Quote was in cold storage (CRM-33) and has now been sent again -
+                        // move the thread back to CRM-02 instead of creating a new one.
+                        quoteAction = "Sent After Declined";
+                    }
+                    else if (prevStatus === "ACCEPTED") {
+                        // Quote was already accepted and is now being sent again - per the
+                        // diagram this is just a DB sync, no ClickUp action.
+                        quoteAction = "Accepted Quote Sent";
+                    }
+                    else {
+                        quoteAction = "Sent";
+                    }
                     break;
                 case "ACCEPTED":
                     quoteAction = "Accepted";
@@ -111,10 +188,27 @@ export async function handleQuoteStatuses(quote) {
                 case "DELETED":
                     quoteAction = "Deleted";
                     break;
+                case "DECLINED":
+                    quoteAction = "Declined";
+                    break;
             }
         }
         else if (lineItemsChanged || totalsChanged) {
-            quoteAction = existingQuote.quoteStatus === "SENT" ? "Revision After Sent" : "Updated";
+            // Xero's Status field stays ACCEPTED/DECLINED forever once reached - it never
+            // flips back to SENT just because the quote was resent. So a resend of an
+            // already-Accepted or already-Declined quote only ever shows up here, as a
+            // "something changed" fallback, not as a Status transition above.
+            if (existingQuote.quoteStatus === "ACCEPTED") {
+                // Per diagram: DB-only sync, no ClickUp action.
+                quoteAction = "Accepted Quote Sent";
+            }
+            else if (existingQuote.quoteStatus === "DECLINED") {
+                // Revive from cold storage: move CRM-33 thread back to CRM-02.
+                quoteAction = "Sent After Declined";
+            }
+            else {
+                quoteAction = existingQuote.quoteStatus === "SENT" ? "Revision After Sent" : "Updated";
+            }
         }
         else {
             logger.info(`No changes for quote ${quote.QuoteNumber}`);
@@ -145,6 +239,12 @@ export async function handleQuoteStatuses(quote) {
             clickUpTaskidCrm5: existingQuote.clickUpTaskidCrm5,
             clickUpTaskidCrm7: existingQuote.clickUpTaskidCrm7,
             clickUpTaskidCrm9: existingQuote.clickUpTaskidCrm9,
+            clickUpTaskidCRM050_Global: existingQuote.clickUpTaskidCRM050_Global,
+            clickUpTaskidCRM050_SERVICES: existingQuote.clickUpTaskidCRM050_SERVICES,
+            clickUpTaskidCRM051_GLOBAL: existingQuote.clickUpTaskidCRM051_GLOBAL,
+            clickUpTaskidCRM051_SERVICES: existingQuote.clickUpTaskidCRM051_SERVICES,
+            clickUpTaskidCRM032: existingQuote.clickUpTaskidCRM032,
+            clickUpTaskidCRM033: existingQuote.clickUpTaskidCRM033,
             quoteId: existingQuote.quoteId || quote.QuoteID,
             createdAt: existingQuote.createdAt,
         };
@@ -180,6 +280,12 @@ export async function handleQuoteStatuses(quote) {
             clickUpTaskidCrm5: "",
             clickUpTaskidCrm7: "",
             clickUpTaskidCrm9: "",
+            clickUpTaskidCRM050_Global: "",
+            clickUpTaskidCRM050_SERVICES: "",
+            clickUpTaskidCRM051_GLOBAL: "",
+            clickUpTaskidCRM051_SERVICES: "",
+            clickUpTaskidCRM032: "",
+            clickUpTaskidCRM033: "",
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
         };
@@ -231,28 +337,20 @@ async function handleQuoteTasks(quote, action) {
             }
             break;
         case "Accepted":
-            // Update task in CRM 2 (pass CRM2 to updateClickUpTask)
+            // Update CRM-02 task, then mark its thread complete right away (per diagram).
             if (quote.clickUpTaskidCrm2) {
-                const taskid = await updateClickUpTask(quote.clickUpTaskidCrm2, quote, action, "CRM2");
-                await addClickUpComment(quote.clickUpTaskidCrm2, "@sales please upload PO and select Process");
+                await updateClickUpTask(quote.clickUpTaskidCrm2, quote, action, "CRM2");
+                await updateClickUpTaskStatus(quote.clickUpTaskidCrm2, "complete");
             }
-            // Create task in CRM 5 if not exists
-            if (!quote.clickUpTaskidCrm5) {
-                const taskCrm5 = await createClickUpTaskForCRM("CRM5", "Accepted", quote);
-                if (taskCrm5) {
-                    quote.clickUpTaskidCrm5 = taskCrm5.id;
+            // Create the job card (one of CRM-050/051 x Global/Services) if not already created.
+            // Replaces the old always-create CRM5 task.
+            const branchKey = resolveJobCardBranch(quote);
+            const branch = JOB_CARD_BRANCHES[branchKey];
+            if (!quote[branch.dbField]) {
+                const taskJobCard = await createClickUpTaskForCRM(branchKey, "Accepted", quote);
+                if (taskJobCard) {
+                    quote[branch.dbField] = taskJobCard.id;
                 }
-            }
-            // Create task in CRM 7 if not exists
-            if (!quote.clickUpTaskidCrm7) {
-                const taskCrm7 = await createClickUpTaskForCRM("CRM7", "Accepted", quote);
-                if (taskCrm7) {
-                    quote.clickUpTaskidCrm7 = taskCrm7.id;
-                }
-            }
-            // After creating CRM7, update CRM5 to include CRM7 link
-            if (quote.clickUpTaskidCrm5 && quote.clickUpTaskidCrm7) {
-                await updateClickUpTask(quote.clickUpTaskidCrm5, quote, action, "CRM5");
             }
             break;
         case "Updated":
@@ -263,6 +361,54 @@ async function handleQuoteTasks(quote, action) {
                     await addClickUpComment(taskid, "Quote Updated");
                 }
             }
+            break;
+        case "Declined":
+            // Create CRM-33 (cold storage) task, referencing CRM-01 and CRM-02.
+            if (!quote.clickUpTaskidCRM033) {
+                const taskCrm33 = await createClickUpTaskForCRM("CRM033", "Declined", quote);
+                if (taskCrm33) {
+                    quote.clickUpTaskidCRM033 = taskCrm33.id;
+                }
+            }
+            // Move the CRM-02 thread over to CRM-33 and mark it complete.
+            if (quote.clickUpTaskidCrm2 && quote.clickUpTaskidCRM033) {
+                await addClickUpComment(quote.clickUpTaskidCrm2, `Task moved to CRM-33\nhttps://app.clickup.com/t/${quote.clickUpTaskidCRM033}`);
+                await updateClickUpTaskStatus(quote.clickUpTaskidCrm2, "complete");
+            }
+            break;
+        case "Deleted":
+            // Create CRM-32 (job lost) task, referencing CRM-01, CRM-02 and CRM-33.
+            if (!quote.clickUpTaskidCRM032) {
+                const taskCrm32 = await createClickUpTaskForCRM("CRM032", "Deleted", quote);
+                if (taskCrm32) {
+                    quote.clickUpTaskidCRM032 = taskCrm32.id;
+                }
+            }
+            // Move the CRM-33 thread over to CRM-32 and mark it complete.
+            if (quote.clickUpTaskidCRM033 && quote.clickUpTaskidCRM032) {
+                await addClickUpComment(quote.clickUpTaskidCRM033, `Task moved to CRM-32\nhttps://app.clickup.com/t/${quote.clickUpTaskidCRM032}`);
+                await updateClickUpTaskStatus(quote.clickUpTaskidCRM033, "complete");
+            }
+            break;
+        case "Sent After Declined":
+            // TEST THEORY (per Shaughn - confirm once we can test): quote was previously
+            // Declined (sitting in CRM-33 cold storage) and has now been sent again.
+            // Move the thread back to CRM-02 instead of creating a brand new CRM-02 task.
+            if (quote.clickUpTaskidCrm2) {
+                await updateClickUpTask(quote.clickUpTaskidCrm2, quote, action, "CRM2");
+            }
+            if (quote.clickUpTaskidCRM033) {
+                if (quote.clickUpTaskidCrm2) {
+                    await addClickUpComment(quote.clickUpTaskidCRM033, `Task moved to CRM-02\nhttps://app.clickup.com/t/${quote.clickUpTaskidCrm2}`);
+                }
+                await updateClickUpTaskStatus(quote.clickUpTaskidCRM033, "complete");
+            }
+            break;
+        case "Accepted Quote Sent":
+            // Quote was already Accepted and is now being sent again. Per the diagram this
+            // is a dead end - no ClickUp task changes, just sync the DB record (handled
+            // automatically by updateQuote() after this function returns).
+            logger.info(`Quote ${quote.quoteNumber} re-sent after Accepted - DB synced, no ClickUp changes made.`);
             break;
     }
 }
@@ -304,6 +450,8 @@ export async function buildClickUpPayload(action, quote, crm = "CRM1") {
 async function constructClickUpPayload(action, quote, crm = "CRM1") {
     let listid = "";
     let status = "";
+    //calculate discount
+    const totalDiscount = (quote.lineItems || []).reduce((sum, item) => sum + (item.DiscountAmount || 0), 0);
     // Build quote items (used by some cases)
     const quoteItemsCrm = (quote.lineItems || [])
         .map((item, index) => {
@@ -332,7 +480,7 @@ async function constructClickUpPayload(action, quote, crm = "CRM1") {
     const totalsText = `
 Quote Currency: ${quote.currencyCode}
 Quote Subtotal: ${quote.subTotal}
-Quote Discount: ${quote.totalDiscount || 0}
+Quote Discount: ${totalDiscount.toFixed(2)}
 Quote Tax: ${quote.taxTotal}
 Quote Total: ${quote.quTotal}
 `;
@@ -387,7 +535,10 @@ ${totalsText}
         due_date = new Date(quote.quoteExpireyDate).getTime();
         listid = process.env.CRM2_LIST_ID;
         status = "to do";
-        customFields = [{ id: CUSTOMER_FIELD_ID, value: quote.customerName }];
+        customFields = [
+            { id: CUSTOMER_FIELD_ID, value: quote.customerName },
+            taskLinkField(CRM01_LINK_FIELD_ID, quote.clickUpTaskidCrm1),
+        ].filter(Boolean);
         description = `${relatedTasksSection}
 Description:
 Scope of Work - ${quote.title}
@@ -405,18 +556,17 @@ ${totalsText}
             comment = "@sales please upload quotation pdf.";
         }
     }
-    else if (crm === "CRM5") {
-        listid = process.env.CRM5_LIST_ID;
+    else if (crm in JOB_CARD_BRANCHES) {
+        // One of: CRM050_GLOBAL, CRM050_SERVICES, CRM051_GLOBAL, CRM051_SERVICES
+        listid = JOB_CARD_BRANCHES[crm].listId;
         status = "to do";
         customFields = [
             { id: CUSTOMER_FIELD_ID, value: quote.customerName },
-            { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
-        ];
+            { id: BUSINESS_UNIT_FIELD_ID, value: safeBusinessUnitId(quote) },
+            taskLinkField(CRM01_LINK_FIELD_ID, quote.clickUpTaskidCrm1),
+            taskLinkField(CRM02_LINK_FIELD_ID, quote.clickUpTaskidCrm2),
+        ].filter(Boolean);
         description = `${relatedTasksSection}
-
-Quote Number - ${quote.quoteNumber}
-PO Number - ${quote.PoNumber}
-
 Description:
 Scope of Work - ${quote.title}
 Quote Link - ${quoteUrl}
@@ -432,29 +582,56 @@ Quote Link - ${quoteUrl}
 Quote Items:
 ${quoteItemsCrm}
 `;
-        //send to telegram
-        await telegramService.sendMessage(telegrammsg, chatId);
     }
-    else if (crm === "CRM7") {
-        listid = process.env.CRM7_LIST_ID;
+    else if (crm === "CRM033") {
+        // crm-033-999-declined-aka-cold-storage
+        due_date = new Date(quote.quoteExpireyDate).getTime();
+        listid = CRM033_LIST_ID;
         status = "to do";
         customFields = [
             { id: CUSTOMER_FIELD_ID, value: quote.customerName },
-            { id: BUSINESS_UNIT_FIELD_ID, value: quote.businessUnitvalueid },
-        ];
+            { id: BUSINESS_UNIT_FIELD_ID, value: safeBusinessUnitId(quote) },
+            taskLinkField(CRM01_LINK_FIELD_ID, quote.clickUpTaskidCrm1),
+            taskLinkField(CRM02_LINK_FIELD_ID, quote.clickUpTaskidCrm2),
+        ].filter(Boolean);
         description = `${relatedTasksSection}
+Description:
+Scope of Work - ${quote.title}
+Quote Status - ${quote.quoteStatus}
+Quote Expiry - ${quote.quoteExpireyDate}
 
-Quote Number - ${quote.quoteNumber}
-PO Number - ${quote.PoNumber}
+Quote Link - ${quoteUrl}
 
+Quote Items:
+${quoteItemsText}
+
+${totalsText}
+`;
+        comment = "@sales contact Customer";
+    }
+    else if (crm === "CRM032") {
+        // crm-032-999-quote-lost-job-card-group
+        due_date = new Date(quote.quoteExpireyDate).getTime();
+        listid = CRM032_LIST_ID;
+        status = "to do";
+        customFields = [
+            { id: CUSTOMER_FIELD_ID, value: quote.customerName },
+            { id: BUSINESS_UNIT_FIELD_ID, value: safeBusinessUnitId(quote) },
+            taskLinkField(CRM01_LINK_FIELD_ID, quote.clickUpTaskidCrm1),
+            taskLinkField(CRM02_LINK_FIELD_ID, quote.clickUpTaskidCrm2),
+            taskLinkField(CRM33_LINK_FIELD_ID, quote.clickUpTaskidCRM033),
+        ].filter(Boolean);
+        description = `${relatedTasksSection}
 Description:
 Scope of Work - ${quote.title}
 Quote Link - ${quoteUrl}
 
 Quote Items:
-${quoteItemsCrm}
+${quoteItemsText}
 
+${totalsText}
 `;
+        comment = "Job Lost";
     }
     return { listid, status, description, customFields, comment, due_date, quoteUrl };
 }
@@ -505,9 +682,8 @@ function getRelatedTasksSection(quote, crm) {
     const taskIds = {
         crm1: quote.clickUpTaskidCrm1,
         crm2: quote.clickUpTaskidCrm2,
-        crm5: quote.clickUpTaskidCrm5,
-        crm7: quote.clickUpTaskidCrm7,
-        crm9: quote.clickUpTaskidCrm9,
+        crm032: quote.clickUpTaskidCRM032,
+        crm033: quote.clickUpTaskidCRM033,
     };
     const links = [];
     switch (crm) {
@@ -515,21 +691,28 @@ function getRelatedTasksSection(quote, crm) {
             if (taskIds.crm1)
                 links.push(`CRM-01 - https://app.clickup.com/t/${taskIds.crm1}`);
             break;
-        case "CRM5":
+        case "CRM050_GLOBAL":
+        case "CRM050_SERVICES":
+        case "CRM051_GLOBAL":
+        case "CRM051_SERVICES":
             if (taskIds.crm1)
                 links.push(`CRM-01 - https://app.clickup.com/t/${taskIds.crm1}`);
             if (taskIds.crm2)
                 links.push(`CRM-02 - https://app.clickup.com/t/${taskIds.crm2}`);
-            if (taskIds.crm7)
-                links.push(`CRM-07 - https://app.clickup.com/t/${taskIds.crm7}`);
             break;
-        case "CRM7":
+        case "CRM033":
             if (taskIds.crm1)
                 links.push(`CRM-01 - https://app.clickup.com/t/${taskIds.crm1}`);
             if (taskIds.crm2)
                 links.push(`CRM-02 - https://app.clickup.com/t/${taskIds.crm2}`);
-            if (taskIds.crm5)
-                links.push(`CRM-05 - https://app.clickup.com/t/${taskIds.crm5}`);
+            break;
+        case "CRM032":
+            if (taskIds.crm1)
+                links.push(`CRM-01 - https://app.clickup.com/t/${taskIds.crm1}`);
+            if (taskIds.crm2)
+                links.push(`CRM-02 - https://app.clickup.com/t/${taskIds.crm2}`);
+            if (taskIds.crm033)
+                links.push(`CRM-33 - https://app.clickup.com/t/${taskIds.crm033}`);
             break;
         // CRM1 and CRM9 remain unchanged (no links needed)
     }

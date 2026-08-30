@@ -1,11 +1,15 @@
 import { Request, Response } from 'express';
-import logger from '../utils/logger';
-import { getClickUpTask } from '../services/clickUpfetch.service';
+import { getClickUpTask, updateClickUpBusinessUnit } from '../services/clickUpfetch.service';
 import { getQuoteByNumber, updateQuote } from '../repositories/dynamo.quote.repository';
 import { extractQuoteName } from '../services/xero.quote.service';
 
 export const businessUnit_FIELD_ID = 'fdf29394-d070-4384-863c-9f2f5885061f';
-const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
+// Allowed Business Unit option IDs from ClickUp
+const ALLOWED_BUSINESS_UNIT_IDS = [
+  'a6ce6bb6-123f-4c9d-b964-dfdb6d4e95ad', // Services
+  'f0dec408-0e75-4248-aed4-282b2ca74fce', // Global
+];
+const DEFAULT_BUSINESS_UNIT_ID = 'a6ce6bb6-123f-4c9d-b964-dfdb6d4e95ad'; // Services
 
 export const xeroBusinessUnitController = {
   businessUnit: async (req: Request, res: Response) => {
@@ -17,6 +21,12 @@ export const xeroBusinessUnitController = {
 
       // Extract Business Unit info
       const businessUnit = extractBusinessUnit(task);
+
+      // Update ClickUp Business Unit
+      if (businessUnit) {
+        await updateClickUpBusinessUnit(taskId, businessUnit.valueId);
+      }
+
       // Extract Quote Name from text_content or description
       const quoteName = extractQuoteName(task) as string;
 
@@ -80,12 +90,9 @@ export const xeroBusinessUnitController = {
 
 // Parse task ID from webhook payload
 function parseInspectionClickUpPayload(clickupPayload: any): string {
-  try {
-    return clickupPayload.payload.id;
-  } catch (error: any) {
-    logger.error('Error parsing inspection payload:', error);
-    throw error;
-  }
+  console.log('CLICKUP WEBHOOK BODY:', JSON.stringify(clickupPayload, null, 2));
+
+  return clickupPayload?.payload?.id || clickupPayload?.id;
 }
 
 // Extract Business Unit with TypeScript-safe types
@@ -103,15 +110,39 @@ function extractBusinessUnit(task: any) {
   const field = t.custom_fields?.find((f: CustomField) => f.name === 'Business Unit');
   if (!field) return null;
 
-  const selectedOption = field.type_config?.options?.find(
+  const options = field.type_config?.options || [];
+  if (options.length === 0) return null;
+
+  // Find the option currently selected in ClickUp
+  let selectedOption = options.find(
     (opt: Option) => opt.id === field.value || opt.orderindex === field.value
   );
 
-  if (!selectedOption) return null;
+  // If nothing selected, use default (Services)
+  if (!selectedOption) {
+    const defaultOption = options.find((opt: Option) => opt.id === DEFAULT_BUSINESS_UNIT_ID);
+    return defaultOption
+      ? { valueId: defaultOption.id, name: defaultOption.name, rawValue: defaultOption.id }
+      : null;
+  }
 
+  // If selected is not in the allowed list, override with default (Services)
+  if (!ALLOWED_BUSINESS_UNIT_IDS.includes(selectedOption.id)) {
+    const defaultOption = options.find((opt: Option) => opt.id === DEFAULT_BUSINESS_UNIT_ID);
+    if (defaultOption) {
+      return {
+        valueId: defaultOption.id,
+        name: defaultOption.name,
+        rawValue: defaultOption.id,
+      };
+    }
+    // Fallback: keep the selected (shouldn't happen if default exists)
+  }
+
+  // Valid selection (Services or Global)
   return {
-    valueId: selectedOption.id, // actual ClickUp option ID
-    name: selectedOption.name, // human-readable name
-    rawValue: field.value, // value sent by ClickUp
+    valueId: selectedOption.id,
+    name: selectedOption.name,
+    rawValue: field.value,
   };
 }

@@ -57,17 +57,8 @@ interface XeroInvoiceResponse {
   Invoices: XeroInvoice[];
 }
 
-interface Subscription {
-  Status: string;
-  Plan?: { Name: string };
-}
-
 interface XeroContactResponse {
   Contacts: Contact[];
-}
-
-interface XeroSubscriptionResponse {
-  Subscriptions: Subscription[];
 }
 
 /*
@@ -138,13 +129,9 @@ async function processWebhookEvents(payload: XeroWebhookPayload) {
         await handleInvoiceEvent(event);
         break;
 
-      case 'CONTACT':
-        await handleContactEvent(event);
-        break;
-
-      case 'SUBSCRIPTION':
-        await handleSubscriptionEvent(event);
-        break;
+      // case 'CONTACT':
+      //   await handleContactEvent(event);
+      //   break;
 
       default:
         logger.warn(`Unhandled category: ${event.eventCategory}`);
@@ -195,28 +182,6 @@ async function handleContactEvent(event: XeroWebhookEvent) {
     // console.log(data);
   } catch (err) {
     logger.error('Contact handler error:', err);
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Subscription Handler
-|--------------------------------------------------------------------------
-*/
-
-async function handleSubscriptionEvent(event: XeroWebhookEvent) {
-  try {
-    const subscriptionUrl = `https://api.xero.com/subscriptions.xro/1.0/Subscriptions/${event.resourceId}`;
-    const data = await fetchFromXero<XeroSubscriptionResponse>(subscriptionUrl, event.tenantId);
-    const subscription = data?.Subscriptions?.[0];
-    if (!subscription) return;
-
-    // console.log('💳 Subscription Status:', subscription.Status);
-    // console.log('Plan:', subscription.Plan?.Name);
-
-    // console.log(data);
-  } catch (err) {
-    logger.error('Subscription handler error:', err);
   }
 }
 
@@ -463,26 +428,3 @@ async function handleInvoiceEvent(event: XeroWebhookEvent) {
     console.error('Invoice handler error:', err);
   }
 }
-
-// const fetch = require("node-fetch");
-// const fs = require("fs");
-
-// async function downloadInvoicePdf(invoiceId) {
-//   const response = await fetch(
-//     `https://api.xero.com/api.xro/2.0/Invoices/${invoiceId}/pdf`,
-//     {
-//       method: "GET",
-//       headers: {
-//         "Authorization": "Bearer YOUR_ACCESS_TOKEN",
-//         "Accept": "application/pdf",
-//         "xero-tenant-id": "YOUR_TENANT_ID"
-//       }
-//     }
-//   );
-
-//   const buffer = await response.buffer();
-//   fs.writeFileSync("invoice.pdf", buffer);
-//   console.log("Invoice saved as invoice.pdf");
-// }
-
-// downloadInvoicePdf("INVOICE_ID_HERE");

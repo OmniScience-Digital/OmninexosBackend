@@ -14,7 +14,6 @@ import poUnit from './xero.purchaseorder.route';
 
 // Secured routes (apiKeyAuth + rate limit + Zod validation via @Route decorator)
 import xeroQuoteSecuredApi from './secured/xero.quote.secured.route';
-import crmShaughnSecuredApi from './secured/xero.crmShaughn.secured.route';
 
 routes.use('/api/v1', xeroBillApi); // Most specific first — Xero INVOICE webhook (HMAC signed)
 routes.use('/api/v1', xeroQuoteWebhookApi); // Xero QUOTE webhook (HMAC signed)
@@ -23,7 +22,6 @@ routes.use('/api/v1', clickupApi); // ClickUp webhook
 routes.use('/api/v1', clickupVifApi); // ClickUp webhook
 routes.use('/api/v1/xero', xeroApi); // OAuth redirect/callback — unauthenticated by design
 routes.use('/api/v1/xero', xeroQuoteSecuredApi); // Frontend-facing — secured
-routes.use('/api/v1/xero', crmShaughnSecuredApi); // Frontend/admin-facing — secured
 routes.use('/api/v1/check', apiCheck);
 routes.use('/api/v1', businessUnit); // ClickUp webhook
 routes.use('/api/v1', poUnit); // ClickUp webhook

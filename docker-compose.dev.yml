@@ -7,7 +7,7 @@ services:
     environment:
       - NODE_ENV=development
       - REDIS_HOST=redis
-    restart: unless-stopped
+    restart: always
     depends_on:
       - redis
     command: ["node", "dist/server.js"]
@@ -17,4 +17,13 @@ services:
     image: redis:latest
     ports:
       - "6379:6379"
-    restart: unless-stopped
+    restart: always
+    # Without this, a container restart (crash, redeploy, EC2 reboot) wipes
+    # Redis clean - BullMQ stores its job queue here, so any in-flight or
+    # scheduled jobs at that moment would just be silently lost.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
