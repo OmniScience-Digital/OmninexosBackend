@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import logger from '../utils/logger';
 
 const CLIENT_ID = process.env.XERO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.XERO_SECRET!;
@@ -6,6 +7,12 @@ const REDIRECT_URI = process.env.REDIRECT_URI!;
 
 const xeroService = {
   getAuthUrl: (): string => {
+    const scope = 'openid profile email accounting.transactions accounting.contacts offline_access';
+
+    logger.info(`XERO CLIENT ID: ${CLIENT_ID}`);
+    logger.info(`XERO REDIRECT URI: ${REDIRECT_URI}`);
+    logger.info(`XERO SCOPES: ${scope}`);
+
     return `https://login.xero.com/identity/connect/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=openid profile email accounting.transactions accounting.contacts offline_access`;
   },
 

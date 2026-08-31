@@ -13,7 +13,7 @@ bullmq abnomalitioes ,
 redis-cli KEYS "bull:quote-polling:*" | xargs redis-cli DEL
 
 
-zip -r OmninexosBackendServer.zip . -x "node_modules/*" ".git/*" "dist/*" "*.DS_Store"
+zip -r OmninexosBackendServer.zip . -x "node_modules/*" ".git/*" "dist/*" "*.DS_Store" ".env"
 
 
 connect on local host

@@ -1,22 +1,27 @@
-import fetch from 'node-fetch';
+import fetch from "node-fetch";
+import logger from "../utils/logger.js";
 const CLIENT_ID = process.env.XERO_CLIENT_ID;
 const CLIENT_SECRET = process.env.XERO_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
 const xeroService = {
     getAuthUrl: () => {
+        const scope = "openid profile email accounting.transactions accounting.contacts offline_access";
+        logger.info(`XERO CLIENT ID: ${CLIENT_ID}`);
+        logger.info(`XERO REDIRECT URI: ${REDIRECT_URI}`);
+        logger.info(`XERO SCOPES: ${scope}`);
         return `https://login.xero.com/identity/connect/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=openid profile email accounting.transactions accounting.contacts offline_access`;
     },
     exchangeCodeForToken: async (code) => {
         const body = new URLSearchParams({
-            grant_type: 'authorization_code',
+            grant_type: "authorization_code",
             code,
             redirect_uri: REDIRECT_URI,
         }).toString();
-        const response = await fetch('https://identity.xero.com/connect/token', {
-            method: 'POST',
+        const response = await fetch("https://identity.xero.com/connect/token", {
+            method: "POST",
             headers: {
-                Authorization: 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'),
-                'Content-Type': 'application/x-www-form-urlencoded',
+                Authorization: "Basic " + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64"),
+                "Content-Type": "application/x-www-form-urlencoded",
             },
             body,
         });
@@ -25,7 +30,7 @@ const xeroService = {
         return response.json();
     },
     getTenants: async (accessToken) => {
-        const response = await fetch('https://api.xero.com/connections', {
+        const response = await fetch("https://api.xero.com/connections", {
             headers: { Authorization: `Bearer ${accessToken}` },
         });
         if (!response.ok)
@@ -34,11 +39,11 @@ const xeroService = {
     },
     // <-- NEW: fetch bills
     getBills: async (accessToken, tenantId) => {
-        const response = await fetch('https://api.xero.com/api.xro/2.0/Bills', {
+        const response = await fetch("https://api.xero.com/api.xro/2.0/Bills", {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
-                'Xero-tenant-id': tenantId,
-                Accept: 'application/json',
+                "Xero-tenant-id": tenantId,
+                Accept: "application/json",
             },
         });
         if (!response.ok)
@@ -47,11 +52,11 @@ const xeroService = {
     },
     // <-- NEW: fetch invoices
     getInvoices: async (accessToken, tenantId) => {
-        const response = await fetch('https://api.xero.com/api.xro/2.0/Invoices', {
+        const response = await fetch("https://api.xero.com/api.xro/2.0/Invoices", {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
-                'Xero-tenant-id': tenantId,
-                Accept: 'application/json',
+                "Xero-tenant-id": tenantId,
+                Accept: "application/json",
             },
         });
         if (!response.ok)
