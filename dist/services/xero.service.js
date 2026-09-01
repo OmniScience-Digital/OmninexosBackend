@@ -1,20 +1,11 @@
 import fetch from 'node-fetch';
+import crypto from 'crypto';
 const CLIENT_ID = process.env.XERO_CLIENT_ID;
 const CLIENT_SECRET = process.env.XERO_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
 const xeroService = {
-    // getAuthUrl: (): string => {
-    //   const state = crypto.randomUUID();
-    //   const params = new URLSearchParams({
-    //     response_type: 'code',
-    //     client_id: CLIENT_ID,
-    //     redirect_uri: REDIRECT_URI,
-    //     scope: 'openid profile email accounting.invoices accounting.quotes accounting.contacts offline_access',
-    //     state,
-    //   });
-    //   return `https://login.xero.com/identity/connect/authorize?${params.toString()}`;
-    // },
-    getAuthUrl: (state) => {
+    getAuthUrl: () => {
+        const state = crypto.randomUUID();
         const params = new URLSearchParams({
             response_type: 'code',
             client_id: CLIENT_ID,

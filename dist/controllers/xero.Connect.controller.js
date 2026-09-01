@@ -1,24 +1,19 @@
-// import { Request, Response } from 'express';
-// import logger from '../utils/logger';
-// import xeroService from '../services/xero.service';
-// import { encrypt } from '../services/encryption.service';
-// import { updateXeroConfig } from '../repositories/dynamo.xeroconfig.repository';
 import logger from "../utils/logger.js";
 import xeroService from "../services/xero.service.js";
 import { encrypt } from "../services/encryption.service.js";
 import { updateXeroConfig } from "../repositories/dynamo.xeroconfig.repository.js";
-import crypto from "crypto";
-// Simple in-memory store for OAuth state (use Redis in production)
-const pendingStates = new Map();
-const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 export const xeroController = {
     // GET /connect → redirects user to Xero login
     redirectToXero: (req, res) => {
         try {
-            const state = crypto.randomUUID();
-            pendingStates.set(state, Date.now() + STATE_TTL_MS);
-            const url = xeroService.getAuthUrl(state);
+            const url = xeroService.getAuthUrl();
             logger.info("Redirecting user to Xero login");
+            // Explicitly prevent any caching of this response (browser, proxy, or
+            // API Gateway/CDN in front of the app). Previously this returned a
+            // static HTML link via res.send(), which Express auto-ETags — since
+            // the link never changes, repeat visits could get served a cached
+            // 304 with no body, silently preventing the redirect from ever
+            // reaching Xero.
             res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
             res.set("Pragma", "no-cache");
             res.set("Expires", "0");
@@ -35,36 +30,29 @@ export const xeroController = {
     handleCallback: async (req, res) => {
         try {
             const code = req.query.code;
-            const state = req.query.state;
-            // Validate state to prevent CSRF
-            if (!state || !pendingStates.has(state)) {
-                res.status(400).json({ success: false, error: "Invalid or expired state" });
-                return;
-            }
-            const expiry = pendingStates.get(state);
-            if (Date.now() > expiry) {
-                pendingStates.delete(state);
-                res.status(400).json({ success: false, error: "State expired" });
-                return;
-            }
-            pendingStates.delete(state);
             if (!code) {
                 res.status(400).json({ success: false, error: "Authorization code missing" });
                 return;
             }
             logger.info("Received Xero callback, exchanging code for tokens");
+            // Exchange code for access + refresh tokens
             const tokens = await xeroService.exchangeCodeForToken(code);
+            // Fetch Xero tenants
             const tenants = await xeroService.getTenants(tokens.access_token);
             if (!tenants || tenants.length === 0) {
                 throw new Error("No Xero tenants returned");
             }
+            // Encrypt the refresh token before saving
             const encryptedRefreshToken = encrypt(tokens.refresh_token);
+            //  Save encrypted refresh token + initial sync timestamps in DynamoDB
             await updateXeroConfig(tenants[0].tenantId, {
                 refreshTokenEncrypted: encryptedRefreshToken,
             });
+            // Respond to client
             res.status(200).json({
                 success: true,
                 message: "Xero connected!",
+                tokens,
                 tenants,
             });
         }
@@ -78,6 +66,7 @@ export const xeroController = {
     },
     fetchBills: async (req, res) => {
         try {
+            // In a real app, you’d store these tokens after callback
             const accessToken = req.query.access_token;
             const tenantId = req.query.tenant_id;
             if (!accessToken || !tenantId) {
