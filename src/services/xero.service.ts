@@ -85,7 +85,6 @@
 // };
 
 // export default xeroService;
-
 import axios from 'axios';
 import logger from '../utils/logger';
 
@@ -105,11 +104,20 @@ const AUTHORIZE_URL = 'https://login.xero.com/identity/connect/authorize';
 const TOKEN_URL = 'https://identity.xero.com/connect/token';
 const CONNECTIONS_URL = 'https://api.xero.com/connections';
 
+// Granular scopes (post 2 March 2026 update). The old broad scopes
+// (accounting.transactions, accounting.reports.read) are being retired —
+// apps created on/after 2 March 2026 can't use them at all, and apps
+// created before that date can opt into granular scopes now and must
+// fully migrate by September 2027. accounting.invoices covers invoices,
+// credit notes, purchase orders, quotes, repeating invoices, and items.
 const SCOPES = [
   'openid',
   'profile',
   'email',
-  'accounting.transactions',
+  'accounting.invoices', // invoices, credit notes, purchase orders, quotes, repeating invoices, items
+  'accounting.payments', // batch payments, overpayments, payments, prepayments
+  'accounting.banktransactions', // bank transactions, bank transfers
+  'accounting.contacts',
   'accounting.settings',
   'offline_access',
 ].join(' ');
