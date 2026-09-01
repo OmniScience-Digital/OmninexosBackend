@@ -9,7 +9,7 @@ const xeroService = {
     //     response_type: 'code',
     //     client_id: CLIENT_ID,
     //     redirect_uri: REDIRECT_URI,
-    //     scope: 'openid profile email accounting.invoices accounting.contacts offline_access',
+    //     scope: 'openid profile email accounting.invoices accounting.quotes accounting.contacts offline_access',
     //     state,
     //   });
     //   return `https://login.xero.com/identity/connect/authorize?${params.toString()}`;
@@ -19,7 +19,7 @@ const xeroService = {
             response_type: 'code',
             client_id: CLIENT_ID,
             redirect_uri: REDIRECT_URI,
-            scope: 'openid profile email accounting.invoices accounting.contacts offline_access',
+            scope: 'openid profile email accounting.invoices accounting.quotes accounting.contacts offline_access',
             state,
         });
         return `https://login.xero.com/identity/connect/authorize?${params.toString()}`;
