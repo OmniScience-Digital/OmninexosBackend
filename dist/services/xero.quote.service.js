@@ -391,11 +391,18 @@ async function handleQuoteTasks(quote, action) {
             }
             break;
         case "Sent After Declined":
-            // TEST THEORY (per Shaughn - confirm once we can test): quote was previously
-            // Declined (sitting in CRM-33 cold storage) and has now been sent again.
-            // Move the thread back to CRM-02 instead of creating a brand new CRM-02 task.
+            // Confirmed per Rev 1.2 of the diagram: quote was previously Declined (sitting
+            // in CRM-33 cold storage) and has now been sent again. Move the thread back to
+            // CRM-02 instead of creating a brand new CRM-02 task, and post the "moved"
+            // comment on BOTH sides of the move (CRM-02 says where it came from, CRM-33
+            // says where it went), then close out CRM-33 and reopen CRM-02.
             if (quote.clickUpTaskidCrm2) {
+                // updateClickUpTask always sets CRM-02 back to 'to do' for this crm ('Mark
+                // CRM-02 Thread as Todo' in the diagram), so no separate status call needed.
                 await updateClickUpTask(quote.clickUpTaskidCrm2, quote, action, "CRM2");
+                if (quote.clickUpTaskidCRM033) {
+                    await addClickUpComment(quote.clickUpTaskidCrm2, `Task moved from CRM-33\nhttps://app.clickup.com/t/${quote.clickUpTaskidCRM033}`);
+                }
             }
             if (quote.clickUpTaskidCRM033) {
                 if (quote.clickUpTaskidCrm2) {
