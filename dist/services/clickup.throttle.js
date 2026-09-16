@@ -93,9 +93,7 @@ export async function clickupFetch(url, init) {
             throw new Error(`[ClickUp] Rate limit exceeded after ${MAX_RETRIES} retries: ${init.method || "GET"} ${url}`);
         }
         const retryAfterHeader = res.headers.get("retry-after");
-        const retryAfterMs = retryAfterHeader
-            ? Number(retryAfterHeader) * 1000
-            : 2000 * (attempt + 1); // exponential-ish fallback if header absent
+        const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 2000 * (attempt + 1); // exponential-ish fallback if header absent
         logger.warn(`[ClickUp throttle] 429 on ${url}, retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
         await sleep(retryAfterMs);
     }
