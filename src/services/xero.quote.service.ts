@@ -1426,26 +1426,47 @@ export async function handleQuoteStatuses(quote: Quote) {
   // a no-op - this is what makes multi-hop jumps safe, and single-step polls
   // behave exactly as before (a 1-step path is just a 1-element list).
   //
-  // If any step throws (ClickUp call failed even after throttle+retry), we
-  // deliberately do NOT call updateQuote(). The DB row stays exactly as it
-  // was before this poll, so next cycle's buildSteps() sees the same old
-  // quoteStatus and replays the same full path again - rather than being
-  // marked "processed" while one or more ClickUp updates silently failed.
-  //
-  // KNOWN LIMITATION: if step N succeeds (e.g. creates CRM-02) and step N+1
-  // then fails, the CRM-02 task ID lives only on this in-memory `updates`
-  // object, which we are discarding - so the retry on the next poll will not
-  // know CRM-02 already exists and may create a second one. Fixing this
-  // requires persisting partial progress safely, which is a separate,
-  // larger change - flagging it rather than pretending it's solved here.
+  // If a step throws partway through, whatever ClickUp tasks were already
+  // created by earlier steps in THIS run are already mutated onto `updates`
+  // (applyQuoteStep sets them in place). We persist that partial progress -
+  // with quoteStatus rolled back to the milestone of the last step that
+  // actually succeeded, not the final target status - so the next poll's
+  // buildSteps() computes only the remaining steps, and finds the already-
+  // created task IDs via applyQuoteStep's own idempotency guards instead of
+  // creating duplicates.
+  const stepsCompleted: QuoteStep[] = [];
+  let lastMilestoneStatus: string | null = null;
+
   try {
     for (const step of steps) {
       await applyQuoteStep(updates, step);
+      stepsCompleted.push(step);
+      if (STEP_MILESTONE_STATUS[step]) {
+        lastMilestoneStatus = STEP_MILESTONE_STATUS[step]!;
+      }
     }
   } catch (err) {
+    if (stepsCompleted.length === 0) {
+      // Nothing succeeded - nothing changed in ClickUp, so leave the DB row
+      // exactly as it was. Next poll recomputes the same full path.
+      logger.error(
+        `Quote ${quote.QuoteNumber}: first step failed, nothing changed in ClickUp. ` +
+          `DB row left unchanged - will retry on next poll. Error:`,
+        err
+      );
+      return;
+    }
+
+    // Roll quoteStatus back to the last milestone actually reached (not the
+    // final target `quote.Status` that `updates` was initialized with above).
+    updates.quoteStatus = lastMilestoneStatus ?? existingQuote.quoteStatus;
+    updates.quoteAction = stepsCompleted[stepsCompleted.length - 1];
+
+    await updateQuote(existingQuote.id, updates);
     logger.error(
-      `Quote ${quote.QuoteNumber}: step failed during replay (steps: ${steps.join(' -> ')}). ` +
-        `DB row left unchanged - will retry on next poll. Error:`,
+      `Quote ${quote.QuoteNumber}: step failed during replay after completing ` +
+        `[${stepsCompleted.join(', ')}] of [${steps.join(', ')}]. Persisted partial progress ` +
+        `(quoteStatus=${updates.quoteStatus}) - remaining steps will retry next poll. Error:`,
       err
     );
     return;
