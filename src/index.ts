@@ -1,3 +1,4 @@
+// src/index.ts
 import 'reflect-metadata';
 import express from 'express';
 import 'dotenv/config';
@@ -12,6 +13,7 @@ import routes from './routes/api.route';
 
 // workers for xero
 import './workers/quotes.worker';
+import './workers/jobcard.worker'; // JOBCARD: handles submitted results (timer, certificates, ClickUp, Telegram)
 //import './workers/purchases.worker';
 
 // keepalive cron - prevents Xero refresh token from expiring during inactivity

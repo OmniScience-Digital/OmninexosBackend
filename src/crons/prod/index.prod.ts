@@ -1,9 +1,11 @@
+// src/crons/prod/index.prod.ts  (MODIFIED - search "JOBCARD" for the 2 additions)
 import logger from '../../utils/logger';
 import cron from 'node-cron';
 import { getFleetvehicles } from '../../helper/fleet/fleet.helper';
 import { getFleetTasks } from '../../helper/task/task.helper';
 import { FleetController } from '../../controllers/cron.fleetController';
 import { addQuoteJob } from '../../queues/quotes.queue';
+import { addJobCardDispatchJob } from '../../queues/jobcard.queue'; // JOBCARD
 
 logger.info('Prod Cron Loaded');
 
@@ -13,6 +15,7 @@ const timeZone = 'Africa/Johannesburg';
 (async () => {
   logger.info('🕒 Starting Prod Quote cron...');
   await addQuoteJob();
+  await addJobCardDispatchJob(); // JOBCARD: check for submitted results every 20s
 })();
 
 //Task 1am cron

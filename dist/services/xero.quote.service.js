@@ -35,6 +35,22 @@
 //   Deleted: 'DELETED',
 //   'Sent After Declined': 'SENT',
 // };
+// /**
+//  * Confirmed: QU-0024 and QU-0024_Rev2 are the SAME underlying Xero quote
+//  * (same QuoteID) - Xero just appends "_RevN" to the quote number when it's
+//  * revised. Whichever variant arrives, either could come first depending on
+//  * which poll cycle catches it, so lookups must key on a stable base number
+//  * regardless of order - not the raw string, which would treat "QU-0024" and
+//  * "QU-0024_Rev2" as two different quotes and spin up a duplicate CRM-01/02
+//  * chain for the second one.
+//  *
+//  * The base number is used ONLY for the DB lookup key (quoteNumber field).
+//  * The raw, latest-seen string is preserved separately (quoteRevisionLabel)
+//  * so ClickUp task titles still show the current revision.
+//  */
+// function getBaseQuoteNumber(rawQuoteNumber: string): string {
+//   return (rawQuoteNumber || '').replace(/_Rev\d+$/i, '').trim();
+// }
 // const TENANT_ID = process.env.XERO_TENANT_ID!;
 // const API_TOKEN = process.env.CLICKUP_API_TOKEN!;
 // const Xero_Url = process.env.Xero_Url!;
@@ -199,7 +215,8 @@
 //   }
 // }
 // export async function handleQuoteStatuses(quote: Quote) {
-//   const existingQuote = await getQuoteByNumber(quote.QuoteNumber);
+//   const baseQuoteNumber = getBaseQuoteNumber(quote.QuoteNumber);
+//   const existingQuote = await getQuoteByNumber(baseQuoteNumber);
 //   const quoteIssueDate = quote.DateString
 //     ? new Date(quote.DateString).toISOString()
 //     : new Date().toISOString();
@@ -214,7 +231,8 @@
 //     const newItem: any = {
 //       id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
 //       quoteId: quote.QuoteID,
-//       quoteNumber: quote.QuoteNumber,
+//       quoteNumber: baseQuoteNumber,
+//       quoteRevisionLabel: quote.QuoteNumber,
 //       quoteReference: quote.Reference || '',
 //       customerID: quote.Contact?.ContactID || '',
 //       customerName: quote.Contact?.Name || '',
@@ -333,7 +351,8 @@
 //     return;
 //   }
 //   const updates: any = {
-//     quoteNumber: quote.QuoteNumber,
+//     quoteNumber: baseQuoteNumber,
+//     quoteRevisionLabel: quote.QuoteNumber,
 //     quoteReference: quote.Reference,
 //     customerID: quote.Contact?.ContactID || '',
 //     customerName: quote.Contact?.Name || '',
@@ -629,15 +648,21 @@
 //   logger.info(`Updated ClickUp task ${taskId} status to ${status}`);
 // }
 // export async function buildClickUpPayload(action: string, quote: any, crm: string = 'CRM1') {
+//   // Always show the latest quote number Xero has reported for this quote,
+//   // revision or not - quoteRevisionLabel is overwritten on every poll to the
+//   // latest raw string seen (e.g. "QU-0024" or "QU-0024_Rev2"), while
+//   // quote.quoteNumber itself stays the stable base used only for DB lookups.
+//   // Falls back to quoteNumber for older rows created before this field existed.
+//   const displayQuoteNumber = quote.quoteRevisionLabel || quote.quoteNumber;
 //   // Per Rev 1.3: job card Name includes the PO No (Qu No, PO No, Customer, Quote Title).
 //   // CRM-01/02/33/32 keep the original 3-part name. If there's no PO yet, just drop that
 //   // segment rather than stuffing a fake "No PO" placeholder into every job card title.
 //   const topic =
 //     crm in JOB_CARD_BRANCHES
-//       ? [quote.quoteNumber, quote.PoNumber || null, quote.customerName, quote.title]
+//       ? [displayQuoteNumber, quote.PoNumber || null, quote.customerName, quote.title]
 //           .filter(Boolean)
 //           .join(' ,')
-//       : `${quote.quoteNumber} ,${quote.customerName} ,${quote.title}`;
+//       : `${displayQuoteNumber} ,${quote.customerName} ,${quote.title}`;
 //   const { listid, status, description, customFields, comment, due_date, quoteUrl } =
 //     await constructClickUpPayload(action, quote, crm);
 //   return { topic, listid, description, status, customFields, comment, due_date, quoteUrl };
@@ -987,6 +1012,7 @@ import { createQuote, updateQuote, getQuoteByNumber, } from "../repositories/dyn
 import { getClickUpTask } from "./clickUpfetch.service.js";
 import { buildSteps, buildContentChangeSteps } from "./quoteTransition.js";
 import { clickupFetch } from "./clickup.throttle.js";
+import { ensureJobCardForQuote, jobCardsEnabled } from "../repositories/dynamo.jobcard.repository.js";
 /**
  * Maps a successfully-completed QuoteStep back to the real Xero status it
  * represents having reached. Used ONLY for partial-failure recovery: if a
@@ -1475,6 +1501,15 @@ export async function applyQuoteStep(quote, step) {
                         await copyAttachments(quote.clickUpTaskidCrm2, jobCardTaskId);
                     }
                 }
+            }
+            // JOBCARD: open the job card in the Omni-NexOS app (JobCard table). Idempotent: one row per quote
+            // number. A DB error is deliberately NOT swallowed - it makes this step retry on the next
+            // poll/webhook, exactly like a failed ClickUp call (and it runs before the "moved to job
+            // card" comment below, so a retry cannot post that comment twice). Skipped until
+            // JOBCARD_TABLE is configured.
+            if (jobCardsEnabled()) {
+                const jobCardResult = await ensureJobCardForQuote(quote, jobCardTaskId);
+                logger.info(`Quote ${quote.quoteNumber}: job card ${jobCardResult}`);
             }
             // Per Rev 1.3: post a "moved to job card" comment on CRM-02 before closing its thread.
             const crmLabel = branchKey.replace("_", "-"); // e.g. CRM050-GLOBAL, CRM051-SERVICES
