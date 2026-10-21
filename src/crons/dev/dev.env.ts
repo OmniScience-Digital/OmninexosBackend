@@ -51,10 +51,13 @@ logger.info('Dev Cron Loaded');
 })();
 
 import { addQuoteJob } from '../../queues/quotes.queue';
+import { addJobCardDispatchJob } from '../../queues/jobcard.queue';
 
 (async () => {
   logger.info('🕒 Starting quote cron...');
   await addQuoteJob();
+  logger.info('🕒 Starting job card dispatch cron...');
+  await addJobCardDispatchJob();
 })();
 
 // import { addPurchaseJob } from '../../queues/purchases.queue';

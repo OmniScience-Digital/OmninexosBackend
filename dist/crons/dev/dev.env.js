@@ -38,9 +38,12 @@ logger.info("Dev Cron Loaded");
     }
 })();
 import { addQuoteJob } from "../../queues/quotes.queue.js";
+import { addJobCardDispatchJob } from "../../queues/jobcard.queue.js";
 (async () => {
     logger.info("\uD83D\uDD52 Starting quote cron...");
     await addQuoteJob();
+    logger.info("\uD83D\uDD52 Starting job card dispatch cron...");
+    await addJobCardDispatchJob();
 })();
 // import { addPurchaseJob } from '../../queues/purchases.queue';
 // (async () => {

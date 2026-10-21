@@ -7,6 +7,7 @@ export const jobCardWorker = createWorker("jobcard-dispatch", async () => {
     if (!jobCardFlowEnabled())
         return; // tables not configured yet: do nothing
     try {
+        logger.info("\u2705 Job card dispatch run started...");
         await processPendingSubmissions(await defaultDispatchDeps());
     }
     catch (err) {
