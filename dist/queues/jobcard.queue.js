@@ -7,5 +7,6 @@ export async function addJobCardDispatchJob() {
         if (job.name === "dispatch-results")
             await jobCardQueue.removeRepeatableByKey(job.key);
     }
-    await jobCardQueue.add("dispatch-results", {}, { repeat: { every: 20000 }, removeOnComplete: true, removeOnFail: 100 });
+    await jobCardQueue.add("poll-quotes", {}, { repeat: { every: 180000 } } // repeat every 180 seconds
+    );
 }
