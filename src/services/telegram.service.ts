@@ -189,10 +189,10 @@ let telegramServiceInstance: TelegramService;
 export function getTelegramService(): TelegramService {
   if (!telegramServiceInstance) {
     telegramServiceInstance = new TelegramService({
-      botToken: process.env.telegramBotToken || '',
+      botToken: process.env.omninexos_bot || '',
     });
 
-    if (!process.env.telegramBotToken || !process.env.chartIDTest) {
+    if (!process.env.omninexos_bot || !process.env.chartIDTest) {
       throw new Error('Missing Telegram configuration in environment variables');
     }
   }

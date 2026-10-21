@@ -215,6 +215,7 @@ async function processSubmission(
         );
       } else {
         try {
+          
           if (await deps.sendTelegram(String(group.chatId), text.telegram)) telegram = 'SENT';
           else errors.push('Telegram: message was not accepted');
         } catch (e) {
