@@ -82,14 +82,20 @@ export interface DispatchSummary {
   retrying: number;
 }
 
+logger.info('[dispatch] module loaded');
+
 export async function processPendingSubmissions(
   deps: DispatchDeps,
   batch = 25
 ): Promise<DispatchSummary> {
   const { repo } = deps;
   const nowMs = deps.now().getTime();
+  logger.info(`[dispatch] processPendingSubmissions start, batch=${batch}`);
 
-  const pending = (await repo.listPendingSubmissions(100)).sort(
+  const raw = await repo.listPendingSubmissions(100);
+  logger.info(`[dispatch] listPendingSubmissions returned ${raw.length} rows`);
+
+  const pending = raw.sort(
     (a: any, b: any) => Date.parse(a.submittedAt) - Date.parse(b.submittedAt)
   );
 
@@ -106,31 +112,48 @@ export async function processPendingSubmissions(
   };
 
   for (const sub of pending.slice(0, batch)) {
-    if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) break;
-    if (!(await repo.claimSubmission(sub.id, nowMs, LEASE_MS))) break;
+    logger.info(
+      `[dispatch] examine sub=${sub.id} jc=${sub.jobCardId} submittedAt=${sub.submittedAt} nextAttemptAt=${sub.nextAttemptAt ?? 'none'}`
+    );
+
+    if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) {
+      logger.info(`[dispatch] sub=${sub.id} not due yet — break (preserve order)`);
+      break;
+    }
+
+    const claimed = await repo.claimSubmission(sub.id, nowMs, LEASE_MS);
+    logger.info(`[dispatch] claim sub=${sub.id} => ${claimed}`);
+    if (!claimed) {
+      logger.info(`[dispatch] sub=${sub.id} claim failed — break (another worker has it)`);
+      break;
+    }
 
     summary.handled += 1;
     try {
       const done = await processSubmission(deps, sub, stopTimer);
+      logger.info(`[dispatch] processSubmission sub=${sub.id} => done=${done}`);
       if (done) {
         summary.finished += 1;
       } else {
         summary.retrying += 1;
+        logger.info(`[dispatch] sub=${sub.id} retrying — break (preserve order)`);
         break;
       }
     } catch (e) {
-      logger.error(`Result ${sub.id}: unexpected failure`, e);
+      logger.error(`[dispatch] sub=${sub.id} unexpected failure`, e);
       const finished = await recordUnexpectedFailure(deps, sub, msg(e));
+      logger.info(`[dispatch] recordUnexpectedFailure sub=${sub.id} => finished=${finished}`);
       if (finished) {
         summary.finished += 1;
       } else {
         summary.retrying += 1;
+        logger.info(`[dispatch] sub=${sub.id} retrying after error — break`);
         break;
       }
     }
   }
 
-  if (summary.handled) logger.info('Job card results handled', summary);
+  logger.info(`[dispatch] summary ${JSON.stringify(summary)}`);
   return summary;
 }
 
@@ -148,13 +171,16 @@ export async function stopTimerIfComplete(
     entries,
     deps.now().toISOString()
   );
-  if (!plan) return;
+  if (!plan) {
+    logger.info(`[dispatch] stopTimer jc=${jobCardId} — not complete yet`);
+    return;
+  }
   for (const e of entries.filter(isOpen)) {
     const endedAt = clampEnd(e.startedAt, plan.stopAt);
     await repo.closeTimeEntry(e.id, endedAt, minutesBetween(e.startedAt, endedAt), plan.reason);
   }
   await repo.setJobCardTotal(jobCardId, closedMinutesTotal(await repo.listTimeEntries(jobCardId)));
-  logger.info(`Job card ${jobCardId}: time stopped (${plan.reason})`);
+  logger.info(`[dispatch] stopTimer jc=${jobCardId} stopped (${plan.reason})`);
 }
 
 async function processSubmission(
@@ -164,8 +190,10 @@ async function processSubmission(
 ): Promise<boolean> {
   const { repo } = deps;
   const nowMs = deps.now().getTime();
+  logger.info(`[dispatch] processSubmission start sub=${sub.id}`);
   const jobCard = await repo.getJobCard(sub.jobCardId);
   if (!jobCard) {
+    logger.error(`[dispatch] sub=${sub.id} job card ${sub.jobCardId} not found — failing`);
     await finish(
       deps,
       sub,
@@ -182,13 +210,16 @@ async function processSubmission(
   try {
     await stopTimer(jobCard.id);
   } catch (e) {
+    logger.error(`[dispatch] sub=${sub.id} timer stop failed`, e);
     errors.push(`Timer: ${msg(e)}`);
   }
 
   if (deps.issueCertificate && (CALIBRATION_TYPES as readonly string[]).includes(sub.moduleType)) {
     try {
+      logger.info(`[dispatch] sub=${sub.id} issuing certificate`);
       await deps.issueCertificate(sub.scaleId, jobCard);
     } catch (e) {
+      logger.error(`[dispatch] sub=${sub.id} certificate failed`, e);
       errors.push(`Certificate: ${msg(e)}`);
     }
   }
@@ -198,19 +229,24 @@ async function processSubmission(
   let waiting = false;
   const progress: Row = {};
 
+  logger.info(`[dispatch] sub=${sub.id} initial clickup=${clickup} telegram=${telegram}`);
+
   if (clickup !== 'SENT' || telegram !== 'SENT') {
+    logger.info(`[dispatch] sub=${sub.id} building texts`);
     const text = await buildTexts(deps, sub, jobCard);
     const photos = deps.loadPhoto ? photoEntries(parsePayload(sub.payload)) : [];
+    logger.info(`[dispatch] sub=${sub.id} photos=${photos.length}`);
     const saveProgress = async (patch: Row) => {
       Object.assign(progress, patch);
       await repo.updateSubmission(sub.id, patch);
+      logger.info(`[dispatch] sub=${sub.id} progress saved ${JSON.stringify(Object.keys(patch))}`);
     };
     const loadOne = async (p: { key: string; label: string }) => {
       try {
         return await deps.loadPhoto!(p.key, p.label);
       } catch (e) {
         if (e instanceof PhotoMissingError) {
-          logger.warn(`Result ${sub.id}: ${msg(e)}`);
+          logger.warn(`[dispatch] sub=${sub.id} photo missing: ${msg(e)}`);
           return null;
         }
         throw e;
@@ -219,11 +255,13 @@ async function processSubmission(
 
     if (clickup !== 'SENT') {
       if (!jobCard.clickupTaskId) {
+        logger.info(`[dispatch] sub=${sub.id} no ClickUp task — waiting`);
         waiting = true;
         notes.push('No ClickUp task on the job card yet');
       } else {
         try {
           if (!(sub.clickupTextSent === true)) {
+            logger.info(`[dispatch] sub=${sub.id} sending ClickUp text`);
             await deps.postClickUpComment(jobCard.clickupTaskId, text.clickup);
             await saveProgress({ clickupTextSent: true });
           }
@@ -236,7 +274,9 @@ async function processSubmission(
             await saveProgress({ clickupPhotosSent: [...done] });
           }
           clickup = 'SENT';
+          logger.info(`[dispatch] sub=${sub.id} ClickUp SENT`);
         } catch (e) {
+          logger.error(`[dispatch] sub=${sub.id} ClickUp failed`, e);
           errors.push(`ClickUp: ${msg(e)}`);
         }
       }
@@ -247,6 +287,7 @@ async function processSubmission(
         ? await repo.getTelegramGroup(jobCard.telegramGroupId)
         : null;
       if (!group || group.active === false) {
+        logger.info(`[dispatch] sub=${sub.id} no active Telegram group — waiting`);
         waiting = true;
         notes.push(
           group ? 'The linked Telegram group is inactive' : 'No Telegram group linked yet'
@@ -254,6 +295,7 @@ async function processSubmission(
       } else {
         const chatId = String(group.chatId);
         const ownerId = String(sub.id);
+        logger.info(`[dispatch] sub=${sub.id} Telegram group chatId=${chatId}`);
 
         let shouldProceed = true;
         let holdLock = false;
@@ -261,6 +303,7 @@ async function processSubmission(
         if (deps.groupLock) {
           try {
             holdLock = await deps.groupLock.acquire(chatId, ownerId, GROUP_LOCK_TTL_MS);
+            logger.info(`[dispatch] sub=${sub.id} lock acquire => ${holdLock}`);
             if (!holdLock) {
               shouldProceed = false;
               waiting = true;
@@ -268,23 +311,30 @@ async function processSubmission(
             }
           } catch (e) {
             logger.warn(
-              `Result ${sub.id}: group lock unavailable (${msg(e)}); ` +
-                'proceeding without cross-instance ordering'
+              `[dispatch] sub=${sub.id} lock unavailable (${msg(e)}) — proceeding without lock`
             );
             shouldProceed = true;
             holdLock = false;
           }
+        } else {
+          logger.warn(
+            `[dispatch] sub=${sub.id} no groupLock provided — cross-instance ordering OFF`
+          );
         }
 
         if (shouldProceed) {
           try {
             if (!(sub.telegramTextSent === true)) {
+              logger.info(`[dispatch] sub=${sub.id} sending Telegram text`);
               if (!(await deps.sendTelegram(chatId, text.telegram)))
                 throw new Error('message was not accepted');
               await saveProgress({ telegramTextSent: true });
+            } else {
+              logger.info(`[dispatch] sub=${sub.id} Telegram text already sent — skipping`);
             }
             const done = new Set<string>(sub.telegramPhotosSent ?? []);
             const todo = photos.filter((p) => !done.has(p.key));
+            logger.info(`[dispatch] sub=${sub.id} Telegram photos to send=${todo.length}`);
             for (let i = 0; i < todo.length && deps.sendTelegramPhotos; i += 10) {
               const chunk = todo.slice(i, i + 10);
               const files: (LoadedPhoto & { caption?: string })[] = [];
@@ -292,20 +342,24 @@ async function processSubmission(
                 const file = await loadOne(p);
                 if (file) files.push({ ...file, caption: p.label });
               }
+              logger.info(`[dispatch] sub=${sub.id} sending photo album size=${files.length}`);
               if (files.length && !(await deps.sendTelegramPhotos(chatId, files)))
                 throw new Error('photos were not accepted');
               for (const p of chunk) done.add(p.key);
               await saveProgress({ telegramPhotosSent: [...done] });
             }
             telegram = 'SENT';
+            logger.info(`[dispatch] sub=${sub.id} Telegram SENT`);
           } catch (e) {
+            logger.error(`[dispatch] sub=${sub.id} Telegram failed`, e);
             errors.push(`Telegram: ${msg(e)}`);
           } finally {
             if (holdLock && deps.groupLock) {
               try {
                 await deps.groupLock.release(chatId, ownerId);
+                logger.info(`[dispatch] sub=${sub.id} lock released`);
               } catch (e) {
-                logger.warn(`Result ${sub.id}: group lock release failed (${msg(e)})`);
+                logger.warn(`[dispatch] sub=${sub.id} lock release failed (${msg(e)})`);
               }
             }
           }
@@ -316,24 +370,27 @@ async function processSubmission(
 
   const attempts = (Number(sub.deliveryAttempts) || 0) + (errors.length ? 1 : 0);
   const allDone = clickup === 'SENT' && telegram === 'SENT' && errors.length === 0;
+  logger.info(
+    `[dispatch] sub=${sub.id} result clickup=${clickup} telegram=${telegram} errors=${errors.length} notes=${notes.length} attempts=${attempts}`
+  );
+
   if (allDone) {
     await finish(deps, sub, { clickup, telegram }, undefined, attempts);
+    logger.info(`[dispatch] sub=${sub.id} FINISHED`);
     return true;
   }
 
   const tooOld = nowMs - Date.parse(sub.submittedAt) > WAIT_CAP_MS;
   if (attempts >= MAX_ATTEMPTS || (tooOld && errors.length === 0)) {
-    await finish(
-      deps,
-      sub,
-      { clickup, telegram },
-      [...errors, ...notes].join('; ') || 'Gave up',
-      attempts
-    );
+    const reason = [...errors, ...notes].join('; ') || 'Gave up';
+    await finish(deps, sub, { clickup, telegram }, reason, attempts);
+    logger.error(`[dispatch] sub=${sub.id} GIVING UP after ${attempts} attempts: ${reason}`);
     return true;
   }
 
   const delay = errors.length ? retryDelayMs(attempts) : WAIT_RECHECK_MS;
+  const nextAttemptAt = new Date(nowMs + delay).toISOString();
+  logger.info(`[dispatch] sub=${sub.id} RETRY scheduled at ${nextAttemptAt}`);
   await repo.updateSubmission(
     sub.id,
     {
@@ -341,7 +398,7 @@ async function processSubmission(
       telegramStatus: telegram,
       deliveryAttempts: attempts,
       deliveryError: [...errors, ...notes].join('; ') || undefined,
-      nextAttemptAt: new Date(nowMs + delay).toISOString(),
+      nextAttemptAt,
     },
     ['lockedUntil', ...([...errors, ...notes].length ? [] : ['deliveryError'])]
   );
@@ -356,6 +413,9 @@ async function finish(
   attempts: number
 ) {
   const f = (c: Channel): Channel => (c === 'SENT' ? 'SENT' : 'FAILED');
+  logger.info(
+    `[dispatch] finish sub=${sub.id} clickup=${f(status.clickup)} telegram=${f(status.telegram)} error=${error ?? 'none'}`
+  );
   await deps.repo.updateSubmission(
     sub.id,
     {
@@ -375,6 +435,7 @@ async function recordUnexpectedFailure(
   error: string
 ): Promise<boolean> {
   const attempts = (Number(sub.deliveryAttempts) || 0) + 1;
+  logger.error(`[dispatch] recordUnexpectedFailure sub=${sub.id} attempts=${attempts}: ${error}`);
   if (attempts >= MAX_ATTEMPTS) {
     await finish(
       deps,
@@ -425,6 +486,7 @@ async function buildTexts(
 }
 
 export async function defaultDispatchDeps(): Promise<DispatchDeps> {
+  logger.info('[dispatch] defaultDispatchDeps — building deps');
   const repo = await import('../repositories/dynamo.jobcardflow.repository');
   const certificateDeps = {
     repo,
@@ -432,10 +494,12 @@ export async function defaultDispatchDeps(): Promise<DispatchDeps> {
     render: renderCertificatePdf,
     upload: uploadCertificatePdf,
   };
+  const groupLock = await getDefaultGroupLock();
+  logger.info('[dispatch] defaultDispatchDeps — groupLock ready');
   return {
     repo,
     now: () => new Date(),
-    groupLock: await getDefaultGroupLock(),
+    groupLock,
     sendTelegram: async (chatId, text) => {
       const { getTelegramService } = await import('./telegram.service');
       return getTelegramService().sendMessage(text, chatId, { maxRetries: 1 });
