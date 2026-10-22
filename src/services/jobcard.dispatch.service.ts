@@ -1,10 +1,6 @@
 // src/services/jobcard.dispatch.service.ts  (NEW FILE)
 // Handles every submitted result: stops the timer when the last work item is done, issues the certificate,
 // then posts the result to the job card's ClickUp task and Telegram group.
-//
-// Results are found through the sparse `deliveryState = PENDING` index (whoever creates a result sets it).
-// Everything is idempotent and independent: ClickUp and Telegram are tracked separately, so one failing never
-// blocks the other, and a retry never re-sends what was already sent.
 import logger from '../utils/logger';
 import { certificatesEnabled, CALIBRATION_TYPES } from '../helper/jobcard/jobcard.config';
 import {
@@ -17,9 +13,11 @@ import {
 import {
   formatForClickUp,
   formatForTelegram,
+  photoEntries,
   type ModuleType,
   type ResultContext,
 } from '../helper/jobcard/resultFormat';
+import { PhotoMissingError, type LoadedPhoto } from './jobcard.photos.service';
 import type * as Repo from '../repositories/dynamo.jobcardflow.repository';
 import {
   issueCertificateIfReady,
@@ -48,6 +46,13 @@ export interface DispatchDeps {
   now: () => Date;
   sendTelegram: (chatId: string, text: string) => Promise<boolean>;
   postClickUpComment: (taskId: string, text: string) => Promise<void>;
+  /** Photo forwarding. Leave these out and results go out as text only. */
+  loadPhoto?: (key: string, label: string) => Promise<LoadedPhoto>;
+  sendTelegramPhotos?: (
+    chatId: string,
+    photos: (LoadedPhoto & { caption?: string })[]
+  ) => Promise<boolean>;
+  attachClickUpFile?: (taskId: string, photo: LoadedPhoto) => Promise<void>;
   /** undefined while certificates are switched off */
   issueCertificate?: (scaleId: string, jobCard: Row) => Promise<unknown>;
 }
@@ -182,13 +187,31 @@ async function processSubmission(
     }
   }
 
-  // 3. Deliveries: independent of each other
+  // 3. Deliveries: independent of each other. A channel is finished when its text AND its photos are there.
+  // Progress is saved as it goes, so a retry sends only what is still missing (never the text twice).
   let clickup: Channel = sub.clickupStatus === 'SENT' ? 'SENT' : 'PENDING';
   let telegram: Channel = sub.telegramStatus === 'SENT' ? 'SENT' : 'PENDING';
   let waiting = false;
+  const progress: Row = {};
 
   if (clickup !== 'SENT' || telegram !== 'SENT') {
     const text = await buildTexts(deps, sub, jobCard);
+    const photos = deps.loadPhoto ? photoEntries(parsePayload(sub.payload)) : [];
+    const saveProgress = async (patch: Row) => {
+      Object.assign(progress, patch);
+      await repo.updateSubmission(sub.id, patch);
+    };
+    const loadOne = async (p: { key: string; label: string }) => {
+      try {
+        return await deps.loadPhoto!(p.key, p.label);
+      } catch (e) {
+        if (e instanceof PhotoMissingError) {
+          logger.warn(`Result ${sub.id}: ${msg(e)}`);
+          return null; // gone for good: skip it rather than block the rest
+        }
+        throw e;
+      }
+    };
 
     if (clickup !== 'SENT') {
       if (!jobCard.clickupTaskId) {
@@ -196,7 +219,18 @@ async function processSubmission(
         notes.push('No ClickUp task on the job card yet');
       } else {
         try {
-          await deps.postClickUpComment(jobCard.clickupTaskId, text.clickup);
+          if (!(sub.clickupTextSent === true)) {
+            await deps.postClickUpComment(jobCard.clickupTaskId, text.clickup);
+            await saveProgress({ clickupTextSent: true });
+          }
+          const done = new Set<string>(sub.clickupPhotosSent ?? []);
+          for (const p of photos) {
+            if (done.has(p.key) || !deps.attachClickUpFile) continue;
+            const file = await loadOne(p);
+            if (file) await deps.attachClickUpFile(jobCard.clickupTaskId, file);
+            done.add(p.key);
+            await saveProgress({ clickupPhotosSent: [...done] });
+          }
           clickup = 'SENT';
         } catch (e) {
           errors.push(`ClickUp: ${msg(e)}`);
@@ -215,8 +249,27 @@ async function processSubmission(
         );
       } else {
         try {
-          if (await deps.sendTelegram(String(group.chatId), text.telegram)) telegram = 'SENT';
-          else errors.push('Telegram: message was not accepted');
+          const chatId = String(group.chatId);
+          if (!(sub.telegramTextSent === true)) {
+            if (!(await deps.sendTelegram(chatId, text.telegram)))
+              throw new Error('message was not accepted');
+            await saveProgress({ telegramTextSent: true });
+          }
+          const done = new Set<string>(sub.telegramPhotosSent ?? []);
+          const todo = photos.filter((p) => !done.has(p.key));
+          for (let i = 0; i < todo.length && deps.sendTelegramPhotos; i += 10) {
+            const chunk = todo.slice(i, i + 10);
+            const files: (LoadedPhoto & { caption?: string })[] = [];
+            for (const p of chunk) {
+              const file = await loadOne(p);
+              if (file) files.push({ ...file, caption: p.label });
+            }
+            if (files.length && !(await deps.sendTelegramPhotos(chatId, files)))
+              throw new Error('photos were not accepted');
+            for (const p of chunk) done.add(p.key);
+            await saveProgress({ telegramPhotosSent: [...done] });
+          }
+          telegram = 'SENT';
         } catch (e) {
           errors.push(`Telegram: ${msg(e)}`);
         }
@@ -355,6 +408,18 @@ export async function defaultDispatchDeps(): Promise<DispatchDeps> {
     postClickUpComment: async (taskId, text) => {
       const { addClickUpComment } = await import('./xero.quote.service');
       await addClickUpComment(taskId, text);
+    },
+    loadPhoto: async (key, label) => {
+      const { loadJobCardPhoto } = await import('./jobcard.photos.service');
+      return loadJobCardPhoto(key, label);
+    },
+    sendTelegramPhotos: async (chatId, photos) => {
+      const { getTelegramService } = await import('./telegram.service');
+      return getTelegramService().sendPhotos(chatId, photos);
+    },
+    attachClickUpFile: async (taskId, photo) => {
+      const { uploadBufferToClickUpTask } = await import('./xero.quote.service');
+      await uploadBufferToClickUpTask(taskId, photo.data, photo.filename);
     },
     issueCertificate: certificatesEnabled()
       ? (scaleId, jobCard) => issueCertificateIfReady(scaleId, jobCard, certificateDeps)

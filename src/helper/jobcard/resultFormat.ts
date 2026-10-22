@@ -1,4 +1,4 @@
-// src/helper/jobcard/resultFormat.ts  (NEW FILE)
+// src/helper/jobcard/resultFormat.ts
 // Turns a submitted result into the text posted to ClickUp and Telegram. Pure.
 
 export type ModuleType = 'INSPECTION' | 'ZERO_CALIBRATION' | 'SPAN_CALIBRATION';
@@ -93,6 +93,36 @@ export function countPhotos(payload: Record<string, unknown>): number {
     (n, v) => n + (Array.isArray(v) ? v.length : v ? 1 : 0),
     0
   );
+}
+
+const PHOTO_LABEL: Record<string, string> = {
+  speedSensor: 'Speed sensor',
+  integratorPanel: 'Integrator panel',
+  scale: 'Scale photo',
+  zero: 'Zero',
+  offset: 'Offset',
+  actual: 'Actual',
+  indicated: 'Indicated',
+};
+
+export interface PhotoEntry {
+  key: string;
+  label: string;
+}
+
+/** Every photo in a result as storage key + a readable name, in a stable order. */
+export function photoEntries(payload: Record<string, unknown>): PhotoEntry[] {
+  const photos = (payload.photos ?? {}) as Record<string, unknown>;
+  const out: PhotoEntry[] = [];
+  for (const [field, value] of Object.entries(photos)) {
+    const keys = (Array.isArray(value) ? value : [value]).filter(
+      (k): k is string => typeof k === 'string' && k.length > 0
+    );
+    const base =
+      PHOTO_LABEL[field] ?? field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+    keys.forEach((key, i) => out.push({ key, label: keys.length > 1 ? `${base} ${i + 1}` : base }));
+  }
+  return out;
 }
 
 export interface ResultContext {

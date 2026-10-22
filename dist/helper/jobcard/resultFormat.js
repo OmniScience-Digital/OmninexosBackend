@@ -1,4 +1,4 @@
-// src/helper/jobcard/resultFormat.ts  (NEW FILE)
+// src/helper/jobcard/resultFormat.ts
 // Turns a submitted result into the text posted to ClickUp and Telegram. Pure.
 export const MODULE_LABEL = {
     INSPECTION: 'Inspection',
@@ -73,6 +73,26 @@ export function describeResult(type, payload) {
 export function countPhotos(payload) {
     const photos = (payload.photos ?? {});
     return Object.values(photos).reduce((n, v) => n + (Array.isArray(v) ? v.length : v ? 1 : 0), 0);
+}
+const PHOTO_LABEL = {
+    speedSensor: 'Speed sensor',
+    integratorPanel: 'Integrator panel',
+    scale: 'Scale photo',
+    zero: 'Zero',
+    offset: 'Offset',
+    actual: 'Actual',
+    indicated: 'Indicated',
+};
+/** Every photo in a result as storage key + a readable name, in a stable order. */
+export function photoEntries(payload) {
+    const photos = (payload.photos ?? {});
+    const out = [];
+    for (const [field, value] of Object.entries(photos)) {
+        const keys = (Array.isArray(value) ? value : [value]).filter((k) => typeof k === 'string' && k.length > 0);
+        const base = PHOTO_LABEL[field] ?? field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+        keys.forEach((key, i) => out.push({ key, label: keys.length > 1 ? `${base} ${i + 1}` : base }));
+    }
+    return out;
 }
 const sast = (iso) => new Date(iso).toLocaleString('en-ZA', {
     timeZone: 'Africa/Johannesburg',

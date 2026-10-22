@@ -1,3 +1,4 @@
+// src/services/telegram.service.ts
 import "dotenv/config";
 import axios from "axios";
 import FormData from "form-data";
@@ -63,6 +64,45 @@ export class TelegramService {
             }
         }
         return false;
+    }
+    /** One photo, or an album for 2-10 photos. Returns true only when Telegram accepted them. */
+    async sendPhotos(chatId, photos) {
+        return (this.messageQueue = this.messageQueue.then(async () => {
+            if (photos.length === 0)
+                return true;
+            try {
+                const form = new FormData();
+                form.append("chat_id", chatId);
+                let method = "sendPhoto";
+                if (photos.length === 1) {
+                    const p = photos[0];
+                    form.append("photo", p.data, { filename: p.filename, contentType: p.contentType });
+                    if (p.caption)
+                        form.append("caption", p.caption);
+                }
+                else {
+                    method = "sendMediaGroup";
+                    const group = photos.slice(0, 10);
+                    form.append("media", JSON.stringify(group.map((p, i) => ({
+                        type: "photo",
+                        media: `attach://photo${i}`,
+                        ...(p.caption ? { caption: p.caption } : {}),
+                    }))));
+                    group.forEach((p, i) => form.append(`photo${i}`, p.data, { filename: p.filename, contentType: p.contentType }));
+                }
+                const response = await axios.post(`${this.apiUrl}${this.botToken}/${method}`, form, {
+                    headers: form.getHeaders(),
+                    timeout: 60000,
+                    maxBodyLength: Infinity,
+                });
+                return response.data.ok === true;
+            }
+            catch (error) {
+                const axiosError = error;
+                logger.error("Telegram photo send failed:", axiosError.response?.data || axiosError.message);
+                return false;
+            }
+        }));
     }
     async sendPdf(pdfBuffer, chatId, options) {
         return (this.messageQueue = this.messageQueue.then(async () => {
