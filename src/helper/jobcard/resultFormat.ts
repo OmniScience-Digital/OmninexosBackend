@@ -110,9 +110,44 @@ export interface PhotoEntry {
   label: string;
 }
 
+/**
+ * Extra context to append to each photo label:
+ *   "Actual" → "Actual — Avery 1064 — 22 Oct 2026"
+ * Both fields are optional; whatever is provided is joined with " — ".
+ */
+export interface PhotoLabelContext {
+  scaleName?: string;
+  /** ISO timestamp of the submission, e.g. sub.submittedAt */
+  submittedAt?: string;
+}
+
+const sastDateOnly = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-ZA', {
+    timeZone: 'Africa/Johannesburg',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
 /** Every photo in a result as storage key + a readable name, in a stable order. */
-export function photoEntries(payload: Record<string, unknown>): PhotoEntry[] {
+export function photoEntries(
+  payload: Record<string, unknown>,
+  ctx?: PhotoLabelContext
+): PhotoEntry[] {
   const photos = (payload.photos ?? {}) as Record<string, unknown>;
+
+  const suffixParts: string[] = [];
+  if (ctx?.scaleName) suffixParts.push(ctx.scaleName);
+  if (ctx?.submittedAt) {
+    const d = sastDateOnly(ctx.submittedAt);
+    if (d) suffixParts.push(d);
+  }
+  const suffix = suffixParts.join(' — ');
+  const decorate = (base: string) => (suffix ? `${base} — ${suffix}` : base);
+
   const out: PhotoEntry[] = [];
   for (const [field, value] of Object.entries(photos)) {
     const keys = (Array.isArray(value) ? value : [value]).filter(
@@ -120,7 +155,12 @@ export function photoEntries(payload: Record<string, unknown>): PhotoEntry[] {
     );
     const base =
       PHOTO_LABEL[field] ?? field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
-    keys.forEach((key, i) => out.push({ key, label: keys.length > 1 ? `${base} ${i + 1}` : base }));
+    keys.forEach((key, i) =>
+      out.push({
+        key,
+        label: decorate(keys.length > 1 ? `${base} ${i + 1}` : base),
+      })
+    );
   }
   return out;
 }

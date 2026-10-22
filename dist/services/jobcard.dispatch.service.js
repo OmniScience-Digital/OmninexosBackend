@@ -151,10 +151,18 @@ async function processSubmission(deps, sub, stopTimer) {
     logger.info(`[dispatch] sub=${sub.id} initial clickup=${clickup} telegram=${telegram}`);
     if (clickup !== "SENT" || telegram !== "SENT") {
         logger.info(`[dispatch] sub=${sub.id} building texts`);
+        // buildTexts also returns the scale name so photo labels can include it.
         const text = await buildTexts(deps, sub, jobCard);
-        const rawPayload = parsePayload(sub.payload);
-        const photos = deps.loadPhoto ? photoEntries(rawPayload) : [];
+        // Photo labels carry scale name + submission date, e.g.
+        //   "Actual — Avery 1064 — 22 Oct 2026"
+        const photos = deps.loadPhoto
+            ? photoEntries(parsePayload(sub.payload), {
+                scaleName: text.scaleName,
+                submittedAt: sub.submittedAt,
+            })
+            : [];
         logger.info(`[dispatch] sub=${sub.id} loadPhoto=${deps.loadPhoto ? "wired" : "MISSING"} photos=${photos.length} keys=[${photos.map((p) => p.key).join(", ")}]`);
+        logger.info(`[dispatch] sub=${sub.id} photo labels=[${photos.map((p) => p.label).join(" | ")}]`);
         if (photos.length === 0) {
             logger.warn(`[dispatch] sub=${sub.id} payload has no photo entries — nothing will be uploaded`);
         }
@@ -208,7 +216,7 @@ async function processSubmission(deps, sub, stopTimer) {
                             logger.warn(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} skipped — no attachClickUpFile wired`);
                             continue;
                         }
-                        logger.info(`[dispatch] sub=${sub.id} ClickUp loading photo key=${p.key}`);
+                        logger.info(`[dispatch] sub=${sub.id} ClickUp loading photo key=${p.key} label=${p.label}`);
                         const file = await loadOne(p);
                         if (!file) {
                             logger.error(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} unavailable — permanently skipping`);
@@ -223,10 +231,6 @@ async function processSubmission(deps, sub, stopTimer) {
                         catch (uploadError) {
                             const errorMessage = msg(uploadError);
                             if (errorMessage.includes(CLICKUP_STORAGE_ERROR)) {
-                                // ClickUp workspace has no storage left. This is an account-level
-                                // problem we cannot recover from by retrying the same upload.
-                                // Skip this photo (and any others) on ClickUp, but let Telegram
-                                // delivery proceed so the user still receives their result.
                                 logger.warn(`[dispatch] sub=${sub.id} ClickUp storage quota exhausted (${CLICKUP_STORAGE_ERROR}); ` +
                                     `skipping ClickUp photo key=${p.key} — Telegram delivery will continue`);
                                 clickupPhotosOk = false;
@@ -245,8 +249,6 @@ async function processSubmission(deps, sub, stopTimer) {
                         logger.info(`[dispatch] sub=${sub.id} ClickUp SENT (photos=${done.size}/${photos.length})`);
                     }
                     else {
-                        // Photos were skipped due to storage — treat ClickUp as SENT so we
-                        // do not loop forever, but keep the note for the final record.
                         clickup = "SENT";
                         logger.warn(`[dispatch] sub=${sub.id} ClickUp SENT with skipped photos (photos=${done.size}/${photos.length})`);
                     }
@@ -415,7 +417,11 @@ async function buildTexts(deps, sub, jobCard) {
         submittedByName: entries.find((e) => e.userId === sub.submittedBy)?.userName,
         payload: parsePayload(sub.payload),
     };
-    return { telegram: formatForTelegram(ctx), clickup: formatForClickUp(ctx) };
+    return {
+        telegram: formatForTelegram(ctx),
+        clickup: formatForClickUp(ctx),
+        scaleName: ctx.scaleName,
+    };
 }
 export async function defaultDispatchDeps() {
     logger.info("[dispatch] defaultDispatchDeps \u2014 building deps");
