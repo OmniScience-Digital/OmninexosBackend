@@ -11,6 +11,8 @@ export const WAIT_CAP_MS = 7 * 24 * 3600000;
 const WAIT_RECHECK_MS = 2 * 60000;
 const LEASE_MS = 2 * 60000;
 const GROUP_LOCK_TTL_MS = 10 * 60000;
+/** ClickUp error code emitted when the workspace's storage quota is exhausted. */
+const CLICKUP_STORAGE_ERROR = "GBUSED_005";
 export const retryDelayMs = (attempts) => Math.min(2 ** Math.max(0, attempts - 1), 60) * 60000;
 const msg = (e) => (e instanceof Error ? e.message : String(e));
 const parsePayload = (p) => {
@@ -43,17 +45,8 @@ export async function processPendingSubmissions(deps, batch = 25) {
         return stopped.get(jobCardId);
     };
     for (const sub of pending.slice(0, batch)) {
-        // Snapshot of what the DB already knows about this submission's Telegram state.
-        // SENT here means text AND photos were fully delivered — safe to skip past.
         const telegramDoneInDb = sub.telegramStatus === "SENT";
         logger.info(`[dispatch] examine sub=${sub.id} jc=${sub.jobCardId} submittedAt=${sub.submittedAt} nextAttemptAt=${sub.nextAttemptAt ?? "none"} telegramStatus=${sub.telegramStatus} clickupStatus=${sub.clickupStatus}`);
-        // ---------------------------------------------------------------
-        // 1. Not due yet (backoff pending).
-        //    If Telegram is done → skip; the retry is ClickUp-only and cannot
-        //    affect Telegram ordering.
-        //    If Telegram is still pending → break; a later result must not
-        //    send its Telegram text before this one.
-        // ---------------------------------------------------------------
         if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) {
             if (telegramDoneInDb) {
                 logger.info(`[dispatch] sub=${sub.id} not due, telegram=SENT — skip (ClickUp-only retry)`);
@@ -62,10 +55,6 @@ export async function processPendingSubmissions(deps, batch = 25) {
             logger.info(`[dispatch] sub=${sub.id} not due, telegram pending — break (preserve order)`);
             break;
         }
-        // ---------------------------------------------------------------
-        // 2. Claim. If another worker owns it, they may deliver Telegram —
-        //    the same rule applies: safe to skip only if Telegram is done.
-        // ---------------------------------------------------------------
         const claimed = await repo.claimSubmission(sub.id, nowMs, LEASE_MS);
         if (!claimed) {
             if (telegramDoneInDb) {
@@ -101,7 +90,6 @@ export async function processPendingSubmissions(deps, batch = 25) {
                 continue;
             }
             summary.retrying += 1;
-            // Unknown state after an unexpected exception: never overtake this submission.
             logger.info(`[dispatch] sub=${sub.id} retrying after exception — break (preserve order)`);
             break;
         }
@@ -164,8 +152,12 @@ async function processSubmission(deps, sub, stopTimer) {
     if (clickup !== "SENT" || telegram !== "SENT") {
         logger.info(`[dispatch] sub=${sub.id} building texts`);
         const text = await buildTexts(deps, sub, jobCard);
-        const photos = deps.loadPhoto ? photoEntries(parsePayload(sub.payload)) : [];
-        logger.info(`[dispatch] sub=${sub.id} photos=${photos.length}`);
+        const rawPayload = parsePayload(sub.payload);
+        const photos = deps.loadPhoto ? photoEntries(rawPayload) : [];
+        logger.info(`[dispatch] sub=${sub.id} loadPhoto=${deps.loadPhoto ? "wired" : "MISSING"} photos=${photos.length} keys=[${photos.map((p) => p.key).join(", ")}]`);
+        if (photos.length === 0) {
+            logger.warn(`[dispatch] sub=${sub.id} payload has no photo entries — nothing will be uploaded`);
+        }
         const saveProgress = async (patch) => {
             Object.assign(progress, patch);
             await repo.updateSubmission(sub.id, patch);
@@ -177,9 +169,10 @@ async function processSubmission(deps, sub, stopTimer) {
             }
             catch (e) {
                 if (e instanceof PhotoMissingError) {
-                    logger.warn(`[dispatch] sub=${sub.id} photo missing: ${msg(e)}`);
+                    logger.warn(`[dispatch] sub=${sub.id} photo missing for key=${p.key}: ${msg(e)}`);
                     return null;
                 }
+                logger.error(`[dispatch] sub=${sub.id} photo load threw for key=${p.key}: ${msg(e)}`, e);
                 throw e;
             }
         };
@@ -190,24 +183,73 @@ async function processSubmission(deps, sub, stopTimer) {
                 notes.push("No ClickUp task on the job card yet");
             }
             else {
+                let clickupPhotosOk = true;
                 try {
+                    logger.info(`[dispatch] sub=${sub.id} ClickUp taskId=${jobCard.clickupTaskId} attachClickUpFile=${deps.attachClickUpFile ? "wired" : "MISSING"}`);
                     if (!(sub.clickupTextSent === true)) {
                         logger.info(`[dispatch] sub=${sub.id} sending ClickUp text`);
                         await deps.postClickUpComment(jobCard.clickupTaskId, text.clickup);
                         await saveProgress({ clickupTextSent: true });
                     }
+                    else {
+                        logger.info(`[dispatch] sub=${sub.id} ClickUp text already sent — skipping`);
+                    }
+                    if (!deps.attachClickUpFile) {
+                        logger.warn(`[dispatch] sub=${sub.id} attachClickUpFile is NOT wired — photos will be skipped entirely`);
+                    }
                     const done = new Set(sub.clickupPhotosSent ?? []);
+                    logger.info(`[dispatch] sub=${sub.id} ClickUp photos already sent=${done.size} of ${photos.length}`);
                     for (const p of photos) {
-                        if (done.has(p.key) || !deps.attachClickUpFile)
+                        if (done.has(p.key)) {
+                            logger.info(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} already sent — skip`);
                             continue;
+                        }
+                        if (!deps.attachClickUpFile) {
+                            logger.warn(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} skipped — no attachClickUpFile wired`);
+                            continue;
+                        }
+                        logger.info(`[dispatch] sub=${sub.id} ClickUp loading photo key=${p.key}`);
                         const file = await loadOne(p);
-                        if (file)
+                        if (!file) {
+                            logger.error(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} unavailable — permanently skipping`);
+                            done.add(p.key);
+                            await saveProgress({ clickupPhotosSent: [...done] });
+                            continue;
+                        }
+                        logger.info(`[dispatch] sub=${sub.id} ClickUp uploading key=${p.key} file=${file.filename} bytes=${file.data?.length ?? "?"}`);
+                        try {
                             await deps.attachClickUpFile(jobCard.clickupTaskId, file);
+                        }
+                        catch (uploadError) {
+                            const errorMessage = msg(uploadError);
+                            if (errorMessage.includes(CLICKUP_STORAGE_ERROR)) {
+                                // ClickUp workspace has no storage left. This is an account-level
+                                // problem we cannot recover from by retrying the same upload.
+                                // Skip this photo (and any others) on ClickUp, but let Telegram
+                                // delivery proceed so the user still receives their result.
+                                logger.warn(`[dispatch] sub=${sub.id} ClickUp storage quota exhausted (${CLICKUP_STORAGE_ERROR}); ` +
+                                    `skipping ClickUp photo key=${p.key} — Telegram delivery will continue`);
+                                clickupPhotosOk = false;
+                                notes.push("ClickUp storage quota exhausted \u2014 some photos not uploaded");
+                                continue;
+                            }
+                            logger.error(`[dispatch] sub=${sub.id} ClickUp upload failed key=${p.key}: ${errorMessage}`, uploadError);
+                            throw uploadError;
+                        }
+                        logger.info(`[dispatch] sub=${sub.id} ClickUp uploaded key=${p.key}`);
                         done.add(p.key);
                         await saveProgress({ clickupPhotosSent: [...done] });
                     }
-                    clickup = "SENT";
-                    logger.info(`[dispatch] sub=${sub.id} ClickUp SENT`);
+                    if (clickupPhotosOk) {
+                        clickup = "SENT";
+                        logger.info(`[dispatch] sub=${sub.id} ClickUp SENT (photos=${done.size}/${photos.length})`);
+                    }
+                    else {
+                        // Photos were skipped due to storage — treat ClickUp as SENT so we
+                        // do not loop forever, but keep the note for the final record.
+                        clickup = "SENT";
+                        logger.warn(`[dispatch] sub=${sub.id} ClickUp SENT with skipped photos (photos=${done.size}/${photos.length})`);
+                    }
                 }
                 catch (e) {
                     logger.error(`[dispatch] sub=${sub.id} ClickUp failed: ${msg(e)}`, e);
@@ -305,7 +347,7 @@ async function processSubmission(deps, sub, stopTimer) {
     const telegramDone = telegram === "SENT";
     logger.info(`[dispatch] sub=${sub.id} result clickup=${clickup} telegram=${telegram} errors=${errors.length} notes=${notes.length} attempts=${attempts}`);
     if (allDone) {
-        await finish(deps, sub, { clickup, telegram }, undefined, attempts);
+        await finish(deps, sub, { clickup, telegram }, notes.length ? notes.join("; ") : undefined, attempts);
         logger.info(`[dispatch] sub=${sub.id} FINISHED`);
         return { finished: true, telegramDone: true };
     }
@@ -407,6 +449,7 @@ export async function defaultDispatchDeps() {
             return getTelegramService().sendPhotos(chatId, photos);
         },
         attachClickUpFile: async (taskId, photo) => {
+            logger.info(`[dispatch] attachClickUpFile → taskId=${taskId} file=${photo.filename} bytes=${photo.data?.length ?? "?"}`);
             const { uploadBufferToClickUpTask } = await import("./xero.quote.service.js");
             await uploadBufferToClickUpTask(taskId, photo.data, photo.filename);
         },
