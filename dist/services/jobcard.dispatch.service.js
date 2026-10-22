@@ -43,42 +43,67 @@ export async function processPendingSubmissions(deps, batch = 25) {
         return stopped.get(jobCardId);
     };
     for (const sub of pending.slice(0, batch)) {
-        logger.info(`[dispatch] examine sub=${sub.id} jc=${sub.jobCardId} submittedAt=${sub.submittedAt} nextAttemptAt=${sub.nextAttemptAt ?? "none"}`);
+        // Snapshot of what the DB already knows about this submission's Telegram state.
+        // SENT here means text AND photos were fully delivered — safe to skip past.
+        const telegramDoneInDb = sub.telegramStatus === "SENT";
+        logger.info(`[dispatch] examine sub=${sub.id} jc=${sub.jobCardId} submittedAt=${sub.submittedAt} nextAttemptAt=${sub.nextAttemptAt ?? "none"} telegramStatus=${sub.telegramStatus} clickupStatus=${sub.clickupStatus}`);
+        // ---------------------------------------------------------------
+        // 1. Not due yet (backoff pending).
+        //    If Telegram is done → skip; the retry is ClickUp-only and cannot
+        //    affect Telegram ordering.
+        //    If Telegram is still pending → break; a later result must not
+        //    send its Telegram text before this one.
+        // ---------------------------------------------------------------
         if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) {
-            logger.info(`[dispatch] sub=${sub.id} not due yet — break (preserve order)`);
+            if (telegramDoneInDb) {
+                logger.info(`[dispatch] sub=${sub.id} not due, telegram=SENT — skip (ClickUp-only retry)`);
+                continue;
+            }
+            logger.info(`[dispatch] sub=${sub.id} not due, telegram pending — break (preserve order)`);
             break;
         }
+        // ---------------------------------------------------------------
+        // 2. Claim. If another worker owns it, they may deliver Telegram —
+        //    the same rule applies: safe to skip only if Telegram is done.
+        // ---------------------------------------------------------------
         const claimed = await repo.claimSubmission(sub.id, nowMs, LEASE_MS);
-        logger.info(`[dispatch] claim sub=${sub.id} => ${claimed}`);
         if (!claimed) {
-            logger.info(`[dispatch] sub=${sub.id} claim failed — break (another worker has it)`);
+            if (telegramDoneInDb) {
+                logger.info(`[dispatch] sub=${sub.id} claim failed, telegram=SENT — skip`);
+                continue;
+            }
+            logger.info(`[dispatch] sub=${sub.id} claim failed, telegram pending — break (preserve order)`);
             break;
         }
+        logger.info(`[dispatch] claim sub=${sub.id} => true`);
         summary.handled += 1;
         try {
-            const done = await processSubmission(deps, sub, stopTimer);
-            logger.info(`[dispatch] processSubmission sub=${sub.id} => done=${done}`);
-            if (done) {
+            const outcome = await processSubmission(deps, sub, stopTimer);
+            logger.info(`[dispatch] processSubmission sub=${sub.id} => finished=${outcome.finished} telegramDone=${outcome.telegramDone}`);
+            if (outcome.finished) {
                 summary.finished += 1;
+                continue;
             }
-            else {
-                summary.retrying += 1;
-                logger.info(`[dispatch] sub=${sub.id} retrying — break (preserve order)`);
-                break;
+            summary.retrying += 1;
+            if (outcome.telegramDone) {
+                logger.info(`[dispatch] sub=${sub.id} retrying (Telegram done, ClickUp pending) — continue`);
+                continue;
             }
+            logger.info(`[dispatch] sub=${sub.id} retrying (Telegram pending) — break (preserve order)`);
+            break;
         }
         catch (e) {
-            logger.error(`[dispatch] sub=${sub.id} unexpected failure`, e);
+            logger.error(`[dispatch] sub=${sub.id} unexpected failure: ${msg(e)}`, e);
             const finished = await recordUnexpectedFailure(deps, sub, msg(e));
             logger.info(`[dispatch] recordUnexpectedFailure sub=${sub.id} => finished=${finished}`);
             if (finished) {
                 summary.finished += 1;
+                continue;
             }
-            else {
-                summary.retrying += 1;
-                logger.info(`[dispatch] sub=${sub.id} retrying after error — break`);
-                break;
-            }
+            summary.retrying += 1;
+            // Unknown state after an unexpected exception: never overtake this submission.
+            logger.info(`[dispatch] sub=${sub.id} retrying after exception — break (preserve order)`);
+            break;
         }
     }
     logger.info(`[dispatch] summary ${JSON.stringify(summary)}`);
@@ -110,7 +135,7 @@ async function processSubmission(deps, sub, stopTimer) {
     if (!jobCard) {
         logger.error(`[dispatch] sub=${sub.id} job card ${sub.jobCardId} not found — failing`);
         await finish(deps, sub, { clickup: "FAILED", telegram: "FAILED" }, "Job card not found", Number(sub.deliveryAttempts) || 0);
-        return true;
+        return { finished: true, telegramDone: false };
     }
     const errors = [];
     const notes = [];
@@ -118,7 +143,7 @@ async function processSubmission(deps, sub, stopTimer) {
         await stopTimer(jobCard.id);
     }
     catch (e) {
-        logger.error(`[dispatch] sub=${sub.id} timer stop failed`, e);
+        logger.error(`[dispatch] sub=${sub.id} timer stop failed: ${msg(e)}`, e);
         errors.push(`Timer: ${msg(e)}`);
     }
     if (deps.issueCertificate && CALIBRATION_TYPES.includes(sub.moduleType)) {
@@ -127,7 +152,7 @@ async function processSubmission(deps, sub, stopTimer) {
             await deps.issueCertificate(sub.scaleId, jobCard);
         }
         catch (e) {
-            logger.error(`[dispatch] sub=${sub.id} certificate failed`, e);
+            logger.error(`[dispatch] sub=${sub.id} certificate failed: ${msg(e)}`, e);
             errors.push(`Certificate: ${msg(e)}`);
         }
     }
@@ -185,7 +210,7 @@ async function processSubmission(deps, sub, stopTimer) {
                     logger.info(`[dispatch] sub=${sub.id} ClickUp SENT`);
                 }
                 catch (e) {
-                    logger.error(`[dispatch] sub=${sub.id} ClickUp failed`, e);
+                    logger.error(`[dispatch] sub=${sub.id} ClickUp failed: ${msg(e)}`, e);
                     errors.push(`ClickUp: ${msg(e)}`);
                 }
             }
@@ -257,7 +282,7 @@ async function processSubmission(deps, sub, stopTimer) {
                         logger.info(`[dispatch] sub=${sub.id} Telegram SENT`);
                     }
                     catch (e) {
-                        logger.error(`[dispatch] sub=${sub.id} Telegram failed`, e);
+                        logger.error(`[dispatch] sub=${sub.id} Telegram failed: ${msg(e)}`, e);
                         errors.push(`Telegram: ${msg(e)}`);
                     }
                     finally {
@@ -277,22 +302,23 @@ async function processSubmission(deps, sub, stopTimer) {
     }
     const attempts = (Number(sub.deliveryAttempts) || 0) + (errors.length ? 1 : 0);
     const allDone = clickup === "SENT" && telegram === "SENT" && errors.length === 0;
+    const telegramDone = telegram === "SENT";
     logger.info(`[dispatch] sub=${sub.id} result clickup=${clickup} telegram=${telegram} errors=${errors.length} notes=${notes.length} attempts=${attempts}`);
     if (allDone) {
         await finish(deps, sub, { clickup, telegram }, undefined, attempts);
         logger.info(`[dispatch] sub=${sub.id} FINISHED`);
-        return true;
+        return { finished: true, telegramDone: true };
     }
     const tooOld = nowMs - Date.parse(sub.submittedAt) > WAIT_CAP_MS;
     if (attempts >= MAX_ATTEMPTS || (tooOld && errors.length === 0)) {
         const reason = [...errors, ...notes].join("; ") || "Gave up";
         await finish(deps, sub, { clickup, telegram }, reason, attempts);
         logger.error(`[dispatch] sub=${sub.id} GIVING UP after ${attempts} attempts: ${reason}`);
-        return true;
+        return { finished: true, telegramDone };
     }
     const delay = errors.length ? retryDelayMs(attempts) : WAIT_RECHECK_MS;
     const nextAttemptAt = new Date(nowMs + delay).toISOString();
-    logger.info(`[dispatch] sub=${sub.id} RETRY scheduled at ${nextAttemptAt}`);
+    logger.info(`[dispatch] sub=${sub.id} RETRY scheduled at ${nextAttemptAt} telegram=${telegram} clickup=${clickup} errors=[${errors.join(" | ") || "none"}] notes=[${notes.join(" | ") || "none"}]`);
     await repo.updateSubmission(sub.id, {
         clickupStatus: clickup,
         telegramStatus: telegram,
@@ -300,7 +326,7 @@ async function processSubmission(deps, sub, stopTimer) {
         deliveryError: [...errors, ...notes].join("; ") || undefined,
         nextAttemptAt,
     }, ["lockedUntil", ...([...errors, ...notes].length ? [] : ["deliveryError"])]);
-    return false;
+    return { finished: false, telegramDone };
 }
 async function finish(deps, sub, status, error, attempts) {
     const f = (c) => (c === "SENT" ? "SENT" : "FAILED");
