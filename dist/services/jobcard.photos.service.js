@@ -26,7 +26,9 @@ export async function loadJobCardPhoto(key, label) {
         const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
         const data = Buffer.from(await res.Body.transformToByteArray());
         const ext = (key.split('.').pop() ?? 'jpg').toLowerCase();
-        const contentType = res.ContentType && res.ContentType.startsWith('image/') ? res.ContentType : TYPES[ext] ?? 'image/jpeg';
+        const contentType = res.ContentType && res.ContentType.startsWith('image/')
+            ? res.ContentType
+            : (TYPES[ext] ?? 'image/jpeg');
         const safe = label.replace(/[^A-Za-z0-9 _-]/g, '').trim() || 'photo';
         return { data, contentType, filename: `${safe}.${ext in TYPES ? ext : 'jpg'}` };
     }

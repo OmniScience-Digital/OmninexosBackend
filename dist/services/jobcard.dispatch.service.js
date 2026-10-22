@@ -1,17 +1,16 @@
-// src/services/jobcard.dispatch.service.ts  (NEW FILE)
-// Handles every submitted result: stops the timer when the last work item is done, issues the certificate,
-// then posts the result to the job card's ClickUp task and Telegram group.
+// src/services/jobcard.dispatch.service.ts
 import logger from "../utils/logger.js";
 import { certificatesEnabled, CALIBRATION_TYPES } from "../helper/jobcard/jobcard.config.js";
 import { clampEnd, closedMinutesTotal, isOpen, minutesBetween, planStop, } from "../helper/jobcard/timeTracking.js";
 import { formatForClickUp, formatForTelegram, photoEntries, } from "../helper/jobcard/resultFormat.js";
 import { PhotoMissingError } from "./jobcard.photos.service.js";
 import { issueCertificateIfReady, renderCertificatePdf, uploadCertificatePdf, } from "./certificate.service.js";
+import { getDefaultGroupLock } from "./group-lock.service.js";
 export const MAX_ATTEMPTS = 8;
-export const WAIT_CAP_MS = 7 * 24 * 3600000; // give up waiting for a missing group / ClickUp task after 7 days
+export const WAIT_CAP_MS = 7 * 24 * 3600000;
 const WAIT_RECHECK_MS = 2 * 60000;
 const LEASE_MS = 2 * 60000;
-/** 1, 2, 4, 8 ... minutes, at most one hour. */
+const GROUP_LOCK_TTL_MS = 10 * 60000;
 export const retryDelayMs = (attempts) => Math.min(2 ** Math.max(0, attempts - 1), 60) * 60000;
 const msg = (e) => (e instanceof Error ? e.message : String(e));
 const parsePayload = (p) => {
@@ -26,41 +25,51 @@ const parsePayload = (p) => {
 export async function processPendingSubmissions(deps, batch = 25) {
     const { repo } = deps;
     const nowMs = deps.now().getTime();
-    const pending = await repo.listPendingSubmissions(100);
-    const due = pending
-        .filter((s) => !s.nextAttemptAt || Date.parse(s.nextAttemptAt) <= nowMs)
-        .slice(0, batch);
+    const pending = (await repo.listPendingSubmissions(100)).sort((a, b) => Date.parse(a.submittedAt) - Date.parse(b.submittedAt));
     const summary = {
         examined: pending.length,
         handled: 0,
         finished: 0,
         retrying: 0,
     };
-    const stopped = new Map(); // stop the timer once per job card per run
+    const stopped = new Map();
     const stopTimer = (jobCardId) => {
         if (!stopped.has(jobCardId))
             stopped.set(jobCardId, stopTimerIfComplete(deps, jobCardId));
         return stopped.get(jobCardId);
     };
-    for (const sub of due) {
+    for (const sub of pending.slice(0, batch)) {
+        if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs)
+            break;
         if (!(await repo.claimSubmission(sub.id, nowMs, LEASE_MS)))
-            continue; // another worker has it
+            break;
         summary.handled += 1;
         try {
             const done = await processSubmission(deps, sub, stopTimer);
-            done ? (summary.finished += 1) : (summary.retrying += 1);
+            if (done) {
+                summary.finished += 1;
+            }
+            else {
+                summary.retrying += 1;
+                break;
+            }
         }
         catch (e) {
             logger.error(`Result ${sub.id}: unexpected failure`, e);
             const finished = await recordUnexpectedFailure(deps, sub, msg(e));
-            finished ? (summary.finished += 1) : (summary.retrying += 1);
+            if (finished) {
+                summary.finished += 1;
+            }
+            else {
+                summary.retrying += 1;
+                break;
+            }
         }
     }
     if (summary.handled)
         logger.info("Job card results handled", summary);
     return summary;
 }
-/** Stops every open time entry once the last work item is submitted. Safe to run any number of times. */
 export async function stopTimerIfComplete(deps, jobCardId) {
     const { repo } = deps;
     const [items, entries] = await Promise.all([
@@ -74,11 +83,9 @@ export async function stopTimerIfComplete(deps, jobCardId) {
         const endedAt = clampEnd(e.startedAt, plan.stopAt);
         await repo.closeTimeEntry(e.id, endedAt, minutesBetween(e.startedAt, endedAt), plan.reason);
     }
-    // Recompute (never increment) so repeated runs and the web app cannot drift apart.
     await repo.setJobCardTotal(jobCardId, closedMinutesTotal(await repo.listTimeEntries(jobCardId)));
     logger.info(`Job card ${jobCardId}: time stopped (${plan.reason})`);
 }
-/** @returns true when the result is fully handled (and leaves the pending list), false if it will be retried. */
 async function processSubmission(deps, sub, stopTimer) {
     const { repo } = deps;
     const nowMs = deps.now().getTime();
@@ -89,14 +96,12 @@ async function processSubmission(deps, sub, stopTimer) {
     }
     const errors = [];
     const notes = [];
-    // 1. Timer
     try {
         await stopTimer(jobCard.id);
     }
     catch (e) {
         errors.push(`Timer: ${msg(e)}`);
     }
-    // 2. Certificate (calibration results only, and only when switched on)
     if (deps.issueCertificate && CALIBRATION_TYPES.includes(sub.moduleType)) {
         try {
             await deps.issueCertificate(sub.scaleId, jobCard);
@@ -105,8 +110,6 @@ async function processSubmission(deps, sub, stopTimer) {
             errors.push(`Certificate: ${msg(e)}`);
         }
     }
-    // 3. Deliveries: independent of each other. A channel is finished when its text AND its photos are there.
-    // Progress is saved as it goes, so a retry sends only what is still missing (never the text twice).
     let clickup = sub.clickupStatus === "SENT" ? "SENT" : "PENDING";
     let telegram = sub.telegramStatus === "SENT" ? "SENT" : "PENDING";
     let waiting = false;
@@ -125,7 +128,7 @@ async function processSubmission(deps, sub, stopTimer) {
             catch (e) {
                 if (e instanceof PhotoMissingError) {
                     logger.warn(`Result ${sub.id}: ${msg(e)}`);
-                    return null; // gone for good: skip it rather than block the rest
+                    return null;
                 }
                 throw e;
             }
@@ -167,33 +170,64 @@ async function processSubmission(deps, sub, stopTimer) {
                 notes.push(group ? "The linked Telegram group is inactive" : "No Telegram group linked yet");
             }
             else {
-                try {
-                    const chatId = String(group.chatId);
-                    if (!(sub.telegramTextSent === true)) {
-                        if (!(await deps.sendTelegram(chatId, text.telegram)))
-                            throw new Error("message was not accepted");
-                        await saveProgress({ telegramTextSent: true });
-                    }
-                    const done = new Set(sub.telegramPhotosSent ?? []);
-                    const todo = photos.filter((p) => !done.has(p.key));
-                    for (let i = 0; i < todo.length && deps.sendTelegramPhotos; i += 10) {
-                        const chunk = todo.slice(i, i + 10);
-                        const files = [];
-                        for (const p of chunk) {
-                            const file = await loadOne(p);
-                            if (file)
-                                files.push({ ...file, caption: p.label });
+                const chatId = String(group.chatId);
+                const ownerId = String(sub.id);
+                let shouldProceed = true;
+                let holdLock = false;
+                if (deps.groupLock) {
+                    try {
+                        holdLock = await deps.groupLock.acquire(chatId, ownerId, GROUP_LOCK_TTL_MS);
+                        if (!holdLock) {
+                            shouldProceed = false;
+                            waiting = true;
+                            notes.push("Another dispatcher is delivering to this group");
                         }
-                        if (files.length && !(await deps.sendTelegramPhotos(chatId, files)))
-                            throw new Error("photos were not accepted");
-                        for (const p of chunk)
-                            done.add(p.key);
-                        await saveProgress({ telegramPhotosSent: [...done] });
                     }
-                    telegram = "SENT";
+                    catch (e) {
+                        logger.warn(`Result ${sub.id}: group lock unavailable (${msg(e)}); ` +
+                            "proceeding without cross-instance ordering");
+                        shouldProceed = true;
+                        holdLock = false;
+                    }
                 }
-                catch (e) {
-                    errors.push(`Telegram: ${msg(e)}`);
+                if (shouldProceed) {
+                    try {
+                        if (!(sub.telegramTextSent === true)) {
+                            if (!(await deps.sendTelegram(chatId, text.telegram)))
+                                throw new Error("message was not accepted");
+                            await saveProgress({ telegramTextSent: true });
+                        }
+                        const done = new Set(sub.telegramPhotosSent ?? []);
+                        const todo = photos.filter((p) => !done.has(p.key));
+                        for (let i = 0; i < todo.length && deps.sendTelegramPhotos; i += 10) {
+                            const chunk = todo.slice(i, i + 10);
+                            const files = [];
+                            for (const p of chunk) {
+                                const file = await loadOne(p);
+                                if (file)
+                                    files.push({ ...file, caption: p.label });
+                            }
+                            if (files.length && !(await deps.sendTelegramPhotos(chatId, files)))
+                                throw new Error("photos were not accepted");
+                            for (const p of chunk)
+                                done.add(p.key);
+                            await saveProgress({ telegramPhotosSent: [...done] });
+                        }
+                        telegram = "SENT";
+                    }
+                    catch (e) {
+                        errors.push(`Telegram: ${msg(e)}`);
+                    }
+                    finally {
+                        if (holdLock && deps.groupLock) {
+                            try {
+                                await deps.groupLock.release(chatId, ownerId);
+                            }
+                            catch (e) {
+                                logger.warn(`Result ${sub.id}: group lock release failed (${msg(e)})`);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -219,7 +253,6 @@ async function processSubmission(deps, sub, stopTimer) {
     }, ["lockedUntil", ...([...errors, ...notes].length ? [] : ["deliveryError"])]);
     return false;
 }
-/** Leaves the pending list: anything not sent by now is recorded as FAILED. */
 async function finish(deps, sub, status, error, attempts) {
     const f = (c) => (c === "SENT" ? "SENT" : "FAILED");
     await deps.repo.updateSubmission(sub.id, {
@@ -265,7 +298,6 @@ async function buildTexts(deps, sub, jobCard) {
     };
     return { telegram: formatForTelegram(ctx), clickup: formatForClickUp(ctx) };
 }
-// ---------- production wiring ----------
 export async function defaultDispatchDeps() {
     const repo = await import("../repositories/dynamo.jobcardflow.repository.js");
     const certificateDeps = {
@@ -277,7 +309,7 @@ export async function defaultDispatchDeps() {
     return {
         repo,
         now: () => new Date(),
-        // Loaded on first use: these modules read their own environment settings when imported.
+        groupLock: await getDefaultGroupLock(),
         sendTelegram: async (chatId, text) => {
             const { getTelegramService } = await import("./telegram.service.js");
             return getTelegramService().sendMessage(text, chatId, { maxRetries: 1 });
