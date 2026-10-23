@@ -133,7 +133,7 @@ export function formatForTelegram(c) {
     const lines = describeResult(c.moduleType, c.payload).map((l) => `${e(l.label)}: *${e(l.value)}*`);
     const photos = countPhotos(c.payload);
     return [
-        `*${e(MODULE_LABEL[c.moduleType])}${c.sequence ? ` #${c.sequence}` : ''} completed*`,
+        `*${e(MODULE_LABEL[c.moduleType])}${c.sequence ? ` #${c.sequence}` : ''} ${e(c.revision && c.revision > 1 ? `updated (revision ${c.revision})` : 'completed')}*`,
         `${e(c.jcNumber)}${c.customerName ? ` - ${e(c.customerName)}` : ''}`,
         `Scale: ${e(c.scaleName)}`,
         `${sast(c.submittedAt)}${c.submittedByName ? ` by ${e(c.submittedByName)}` : ''}`,
@@ -147,11 +147,22 @@ export function formatForClickUp(c) {
     const lines = describeResult(c.moduleType, c.payload).map((l) => `${l.label}: ${l.value}`);
     const photos = countPhotos(c.payload);
     return [
-        `${MODULE_LABEL[c.moduleType]}${c.sequence ? ` #${c.sequence}` : ''} completed - ${c.jcNumber}`,
+        `${MODULE_LABEL[c.moduleType]}${c.sequence ? ` #${c.sequence}` : ''} ${c.revision && c.revision > 1 ? `updated (revision ${c.revision})` : 'completed'} - ${c.jcNumber}`,
         `Scale: ${c.scaleName}`,
         `${sast(c.submittedAt)}${c.submittedByName ? ` by ${c.submittedByName}` : ''}`,
         '',
         ...lines,
         ...(photos ? [`Photos: ${photos}`] : []),
+    ].join('\n');
+}
+/** Posted once per job card, when the whole scope of work is done. */
+export function formatTotalTimeForTelegram(c) {
+    const e = escapeTelegramMarkdown;
+    return [
+        `*Job card complete*`,
+        `${e(c.jcNumber)}${c.customerName ? ` - ${e(c.customerName)}` : ''}`,
+        ``,
+        `Total time: *${e(c.totalText)}*`,
+        ...c.people.map((p) => `${e(p.name)}: ${e(p.text)}`),
     ].join('\n');
 }

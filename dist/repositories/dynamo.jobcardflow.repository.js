@@ -2,7 +2,7 @@
 // Raw DynamoDB access for the job card flow: handling results, stopping the timer, certificates, Telegram groups.
 // Same style as the other repositories (dynamoClient + marshall). Table/index names: see jobcard.config.ts.
 import "dotenv/config";
-import { GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand, } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, PutItemCommand, QueryCommand, ScanCommand, UpdateItemCommand, } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { dynamoClient } from "../services/dynamo.service.js";
 import { INDEX, table } from "../helper/jobcard/jobcard.config.js";
@@ -77,6 +77,24 @@ export const closeTimeEntry = (id, endedAt, minutes, endReason) => updateById(ta
     endReason,
     updatedAt: new Date().toISOString(),
 });
+/** Job cards that still owe the wrap-up messages (total time, placeholder certificate). A small table, so a scan is fine. */
+export async function listJobCardsAwaitingWrapUp() {
+    const rows = [];
+    let startKey;
+    do {
+        const res = await dynamoClient.send(new ScanCommand({
+            TableName: table("jobCard"),
+            FilterExpression: "attribute_not_exists(timePostedAt) OR (#st = :closed AND (attribute_not_exists(certTelegramAt) OR attribute_not_exists(certClickupAt)))",
+            ExpressionAttributeNames: { "#st": "status" },
+            ExpressionAttributeValues: marshall({ ":closed": "CLOSED" }),
+            ExclusiveStartKey: startKey,
+        }));
+        rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
+        startKey = res.LastEvaluatedKey;
+    } while (startKey);
+    return rows;
+}
+export const setJobCardFields = (jobCardId, set) => updateById(table("jobCard"), jobCardId, set, [], { expression: "attribute_exists(id)" });
 export const setJobCardTotal = (jobCardId, totalMinutes) => updateById(table("jobCard"), jobCardId, { totalMinutes, updatedAt: new Date().toISOString() }, [], {
     expression: "attribute_exists(id)",
 });

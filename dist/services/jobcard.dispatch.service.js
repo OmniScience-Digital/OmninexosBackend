@@ -1,7 +1,7 @@
 // src/services/jobcard.dispatch.service.ts
 import logger from "../utils/logger.js";
 import { certificatesEnabled, CALIBRATION_TYPES } from "../helper/jobcard/jobcard.config.js";
-import { clampEnd, closedMinutesTotal, isOpen, minutesBetween, planStop, } from "../helper/jobcard/timeTracking.js";
+import { clampEnd, mergedMinutesTotal, isOpen, minutesBetween, planStop, } from "../helper/jobcard/timeTracking.js";
 import { formatForClickUp, formatForTelegram, photoEntries, } from "../helper/jobcard/resultFormat.js";
 import { PhotoMissingError } from "./jobcard.photos.service.js";
 import { issueCertificateIfReady, renderCertificatePdf, uploadCertificatePdf, } from "./certificate.service.js";
@@ -44,25 +44,36 @@ export async function processPendingSubmissions(deps, batch = 25) {
             stopped.set(jobCardId, stopTimerIfComplete(deps, jobCardId));
         return stopped.get(jobCardId);
     };
+    // Results for the same Telegram group go out in order. A result that has to wait holds back only the later
+    // results of ITS group (or of its own job card when it has no group yet), never every other job card.
+    const jobCards = new Map();
+    const orderKey = async (sub) => {
+        if (!jobCards.has(sub.jobCardId))
+            jobCards.set(sub.jobCardId, repo.getJobCard(sub.jobCardId));
+        const jc = await jobCards.get(sub.jobCardId);
+        return jc?.telegramGroupId ? `group:${jc.telegramGroupId}` : `jc:${sub.jobCardId}`;
+    };
+    const held = new Set();
     for (const sub of pending.slice(0, batch)) {
         const telegramDoneInDb = sub.telegramStatus === "SENT";
+        const key = await orderKey(sub);
         logger.info(`[dispatch] examine sub=${sub.id} jc=${sub.jobCardId} submittedAt=${sub.submittedAt} nextAttemptAt=${sub.nextAttemptAt ?? "none"} telegramStatus=${sub.telegramStatus} clickupStatus=${sub.clickupStatus}`);
+        if (!telegramDoneInDb && held.has(key)) {
+            logger.info(`[dispatch] sub=${sub.id} waits behind an earlier result for ${key} — skip`);
+            continue;
+        }
         if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) {
-            if (telegramDoneInDb) {
-                logger.info(`[dispatch] sub=${sub.id} not due, telegram=SENT — skip (ClickUp-only retry)`);
-                continue;
-            }
-            logger.info(`[dispatch] sub=${sub.id} not due, telegram pending — break (preserve order)`);
-            break;
+            if (!telegramDoneInDb)
+                held.add(key);
+            logger.info(`[dispatch] sub=${sub.id} not due yet`);
+            continue;
         }
         const claimed = await repo.claimSubmission(sub.id, nowMs, LEASE_MS);
         if (!claimed) {
-            if (telegramDoneInDb) {
-                logger.info(`[dispatch] sub=${sub.id} claim failed, telegram=SENT — skip`);
-                continue;
-            }
-            logger.info(`[dispatch] sub=${sub.id} claim failed, telegram pending — break (preserve order)`);
-            break;
+            if (!telegramDoneInDb)
+                held.add(key);
+            logger.info(`[dispatch] sub=${sub.id} claim failed (another worker has it)`);
+            continue;
         }
         logger.info(`[dispatch] claim sub=${sub.id} => true`);
         summary.handled += 1;
@@ -74,12 +85,8 @@ export async function processPendingSubmissions(deps, batch = 25) {
                 continue;
             }
             summary.retrying += 1;
-            if (outcome.telegramDone) {
-                logger.info(`[dispatch] sub=${sub.id} retrying (Telegram done, ClickUp pending) — continue`);
-                continue;
-            }
-            logger.info(`[dispatch] sub=${sub.id} retrying (Telegram pending) — break (preserve order)`);
-            break;
+            if (!outcome.telegramDone)
+                held.add(key);
         }
         catch (e) {
             logger.error(`[dispatch] sub=${sub.id} unexpected failure: ${msg(e)}`, e);
@@ -90,8 +97,7 @@ export async function processPendingSubmissions(deps, batch = 25) {
                 continue;
             }
             summary.retrying += 1;
-            logger.info(`[dispatch] sub=${sub.id} retrying after exception — break (preserve order)`);
-            break;
+            held.add(key);
         }
     }
     logger.info(`[dispatch] summary ${JSON.stringify(summary)}`);
@@ -112,7 +118,7 @@ export async function stopTimerIfComplete(deps, jobCardId) {
         const endedAt = clampEnd(e.startedAt, plan.stopAt);
         await repo.closeTimeEntry(e.id, endedAt, minutesBetween(e.startedAt, endedAt), plan.reason);
     }
-    await repo.setJobCardTotal(jobCardId, closedMinutesTotal(await repo.listTimeEntries(jobCardId)));
+    await repo.setJobCardTotal(jobCardId, mergedMinutesTotal(await repo.listTimeEntries(jobCardId)));
     logger.info(`[dispatch] stopTimer jc=${jobCardId} stopped (${plan.reason})`);
 }
 async function processSubmission(deps, sub, stopTimer) {
@@ -414,7 +420,9 @@ async function buildTexts(deps, sub, jobCard) {
         moduleType: sub.moduleType,
         sequence: module?.sequence,
         submittedAt: sub.submittedAt,
-        submittedByName: entries.find((e) => e.userId === sub.submittedBy)?.userName,
+        submittedByName: parsePayload(sub.payload).submittedByName ??
+            entries.find((e) => e.userId === sub.submittedBy)?.userName,
+        revision: Number(parsePayload(sub.payload).revision) || undefined,
         payload: parsePayload(sub.payload),
     };
     return {
@@ -453,6 +461,10 @@ export async function defaultDispatchDeps() {
         sendTelegramPhotos: async (chatId, photos) => {
             const { getTelegramService } = await import("./telegram.service.js");
             return getTelegramService().sendPhotos(chatId, photos);
+        },
+        sendTelegramPdf: async (chatId, pdf, filename, caption) => {
+            const { getTelegramService } = await import("./telegram.service.js");
+            return getTelegramService().sendPdf(pdf, chatId, { filename, caption, maxRetries: 1 });
         },
         attachClickUpFile: async (taskId, photo) => {
             logger.info(`[dispatch] attachClickUpFile → taskId=${taskId} file=${photo.filename} bytes=${photo.data?.length ?? "?"}`);

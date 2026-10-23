@@ -6,6 +6,7 @@ import {
   GetItemCommand,
   PutItemCommand,
   QueryCommand,
+  ScanCommand,
   UpdateItemCommand,
 } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
@@ -110,6 +111,30 @@ export const closeTimeEntry = (id: string, endedAt: string, minutes: number, end
     endReason,
     updatedAt: new Date().toISOString(),
   });
+
+/** Job cards that still owe the wrap-up messages (total time, placeholder certificate). A small table, so a scan is fine. */
+export async function listJobCardsAwaitingWrapUp(): Promise<Row[]> {
+  const rows: Row[] = [];
+  let startKey: Record<string, any> | undefined;
+  do {
+    const res = await dynamoClient.send(
+      new ScanCommand({
+        TableName: table('jobCard'),
+        FilterExpression:
+          'attribute_not_exists(timePostedAt) OR (#st = :closed AND (attribute_not_exists(certTelegramAt) OR attribute_not_exists(certClickupAt)))',
+        ExpressionAttributeNames: { '#st': 'status' },
+        ExpressionAttributeValues: marshall({ ':closed': 'CLOSED' }),
+        ExclusiveStartKey: startKey,
+      })
+    );
+    rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
+    startKey = res.LastEvaluatedKey;
+  } while (startKey);
+  return rows;
+}
+
+export const setJobCardFields = (jobCardId: string, set: Row) =>
+  updateById(table('jobCard'), jobCardId, set, [], { expression: 'attribute_exists(id)' });
 
 export const setJobCardTotal = (jobCardId: string, totalMinutes: number) =>
   updateById(

@@ -3,7 +3,7 @@ import logger from '../utils/logger';
 import { certificatesEnabled, CALIBRATION_TYPES } from '../helper/jobcard/jobcard.config';
 import {
   clampEnd,
-  closedMinutesTotal,
+  mergedMinutesTotal,
   isOpen,
   minutesBetween,
   planStop,
@@ -35,6 +35,8 @@ export type FlowRepo = Pick<
   | 'listTimeEntries'
   | 'closeTimeEntry'
   | 'setJobCardTotal'
+  | 'listJobCardsAwaitingWrapUp'
+  | 'setJobCardFields'
   | 'listPendingSubmissions'
   | 'claimSubmission'
   | 'updateSubmission'
@@ -51,6 +53,12 @@ export interface DispatchDeps {
     photos: (LoadedPhoto & { caption?: string })[]
   ) => Promise<boolean>;
   attachClickUpFile?: (taskId: string, photo: LoadedPhoto) => Promise<void>;
+  sendTelegramPdf?: (
+    chatId: string,
+    pdf: Buffer,
+    filename: string,
+    caption: string
+  ) => Promise<boolean>;
   groupLock?: GroupLock;
   issueCertificate?: (scaleId: string, jobCard: Row) => Promise<unknown>;
 }
@@ -119,32 +127,40 @@ export async function processPendingSubmissions(
     return stopped.get(jobCardId)!;
   };
 
+  // Results for the same Telegram group go out in order. A result that has to wait holds back only the later
+  // results of ITS group (or of its own job card when it has no group yet), never every other job card.
+  const jobCards = new Map<string, Promise<Row | null>>();
+  const orderKey = async (sub: Row): Promise<string> => {
+    if (!jobCards.has(sub.jobCardId)) jobCards.set(sub.jobCardId, repo.getJobCard(sub.jobCardId));
+    const jc = await jobCards.get(sub.jobCardId)!;
+    return jc?.telegramGroupId ? `group:${jc.telegramGroupId}` : `jc:${sub.jobCardId}`;
+  };
+  const held = new Set<string>();
+
   for (const sub of pending.slice(0, batch)) {
     const telegramDoneInDb = sub.telegramStatus === 'SENT';
+    const key = await orderKey(sub);
 
     logger.info(
       `[dispatch] examine sub=${sub.id} jc=${sub.jobCardId} submittedAt=${sub.submittedAt} nextAttemptAt=${sub.nextAttemptAt ?? 'none'} telegramStatus=${sub.telegramStatus} clickupStatus=${sub.clickupStatus}`
     );
 
+    if (!telegramDoneInDb && held.has(key)) {
+      logger.info(`[dispatch] sub=${sub.id} waits behind an earlier result for ${key} — skip`);
+      continue;
+    }
+
     if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) {
-      if (telegramDoneInDb) {
-        logger.info(`[dispatch] sub=${sub.id} not due, telegram=SENT — skip (ClickUp-only retry)`);
-        continue;
-      }
-      logger.info(`[dispatch] sub=${sub.id} not due, telegram pending — break (preserve order)`);
-      break;
+      if (!telegramDoneInDb) held.add(key);
+      logger.info(`[dispatch] sub=${sub.id} not due yet`);
+      continue;
     }
 
     const claimed = await repo.claimSubmission(sub.id, nowMs, LEASE_MS);
     if (!claimed) {
-      if (telegramDoneInDb) {
-        logger.info(`[dispatch] sub=${sub.id} claim failed, telegram=SENT — skip`);
-        continue;
-      }
-      logger.info(
-        `[dispatch] sub=${sub.id} claim failed, telegram pending — break (preserve order)`
-      );
-      break;
+      if (!telegramDoneInDb) held.add(key);
+      logger.info(`[dispatch] sub=${sub.id} claim failed (another worker has it)`);
+      continue;
     }
     logger.info(`[dispatch] claim sub=${sub.id} => true`);
 
@@ -161,14 +177,7 @@ export async function processPendingSubmissions(
       }
 
       summary.retrying += 1;
-      if (outcome.telegramDone) {
-        logger.info(
-          `[dispatch] sub=${sub.id} retrying (Telegram done, ClickUp pending) — continue`
-        );
-        continue;
-      }
-      logger.info(`[dispatch] sub=${sub.id} retrying (Telegram pending) — break (preserve order)`);
-      break;
+      if (!outcome.telegramDone) held.add(key);
     } catch (e) {
       logger.error(`[dispatch] sub=${sub.id} unexpected failure: ${msg(e)}`, e);
       const finished = await recordUnexpectedFailure(deps, sub, msg(e));
@@ -178,8 +187,7 @@ export async function processPendingSubmissions(
         continue;
       }
       summary.retrying += 1;
-      logger.info(`[dispatch] sub=${sub.id} retrying after exception — break (preserve order)`);
-      break;
+      held.add(key);
     }
   }
 
@@ -209,7 +217,7 @@ export async function stopTimerIfComplete(
     const endedAt = clampEnd(e.startedAt, plan.stopAt);
     await repo.closeTimeEntry(e.id, endedAt, minutesBetween(e.startedAt, endedAt), plan.reason);
   }
-  await repo.setJobCardTotal(jobCardId, closedMinutesTotal(await repo.listTimeEntries(jobCardId)));
+  await repo.setJobCardTotal(jobCardId, mergedMinutesTotal(await repo.listTimeEntries(jobCardId)));
   logger.info(`[dispatch] stopTimer jc=${jobCardId} stopped (${plan.reason})`);
 }
 
@@ -611,7 +619,10 @@ async function buildTexts(
     moduleType: sub.moduleType as ModuleType,
     sequence: module?.sequence,
     submittedAt: sub.submittedAt,
-    submittedByName: entries.find((e: any) => e.userId === sub.submittedBy)?.userName,
+    submittedByName:
+      (parsePayload(sub.payload).submittedByName as string | undefined) ??
+      entries.find((e: any) => e.userId === sub.submittedBy)?.userName,
+    revision: Number(parsePayload(sub.payload).revision) || undefined,
     payload: parsePayload(sub.payload),
   };
   return {
@@ -651,6 +662,10 @@ export async function defaultDispatchDeps(): Promise<DispatchDeps> {
     sendTelegramPhotos: async (chatId, photos) => {
       const { getTelegramService } = await import('./telegram.service');
       return getTelegramService().sendPhotos(chatId, photos);
+    },
+    sendTelegramPdf: async (chatId, pdf, filename, caption) => {
+      const { getTelegramService } = await import('./telegram.service');
+      return getTelegramService().sendPdf(pdf, chatId, { filename, caption, maxRetries: 1 });
     },
     attachClickUpFile: async (taskId, photo) => {
       logger.info(
