@@ -14,7 +14,7 @@ export interface EntryLite {
   id: string;
   userId?: string | null;
   userName?: string | null;
-  startedAt?: string | null;
+  startedAt: string;
   endedAt?: string | null;
   minutes?: number | null;
 }
@@ -62,6 +62,14 @@ export const minutesBetween = (startIso: string, endIso: string): number =>
 export const closedMinutesTotal = (entries: Pick<EntryLite, 'endedAt' | 'minutes'>[]): number =>
   entries.reduce((sum, e) => sum + (e.endedAt ? (e.minutes ?? 0) : 0), 0);
 
+/** Just the fields the totals need. All optional, so rows read untyped from the database are accepted as they are. */
+export interface TimeLike {
+  userId?: string | null;
+  userName?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+}
+
 export interface PersonTime {
   userId: string;
   name: string;
@@ -72,12 +80,10 @@ export interface PersonTime {
  * Time per PERSON across CLOSED entries. Entries of one person that overlap (two logins running at once, or a
  * second device) are counted once; different people at the same time each count (it is time on the job).
  */
-export function personTimes(
-  entries: Pick<EntryLite, 'userId' | 'userName' | 'startedAt' | 'endedAt'>[]
-): PersonTime[] {
+export function personTimes(entries: TimeLike[]): PersonTime[] {
   const byPerson = new Map<string, { name: string; spans: [number, number][] }>();
   for (const e of entries) {
-    if (!e.startedAt || !e.endedAt) continue;
+    if (!e.endedAt || !e.startedAt) continue;
     const start = Date.parse(e.startedAt);
     const end = Date.parse(e.endedAt);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
@@ -103,9 +109,8 @@ export function personTimes(
 }
 
 /** Job card total: the sum of each person's time. */
-export const mergedMinutesTotal = (
-  entries: Pick<EntryLite, 'userId' | 'userName' | 'startedAt' | 'endedAt'>[]
-): number => personTimes(entries).reduce((n, p) => n + p.minutes, 0);
+export const mergedMinutesTotal = (entries: TimeLike[]): number =>
+  personTimes(entries).reduce((n, p) => n + p.minutes, 0);
 
 export const formatDuration = (minutes: number): string => {
   const m = Math.max(0, Math.round(minutes));

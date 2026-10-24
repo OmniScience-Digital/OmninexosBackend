@@ -40,7 +40,7 @@ export const closedMinutesTotal = (entries) => entries.reduce((sum, e) => sum + 
 export function personTimes(entries) {
     const byPerson = new Map();
     for (const e of entries) {
-        if (!e.startedAt || !e.endedAt)
+        if (!e.endedAt || !e.startedAt)
             continue;
         const start = Date.parse(e.startedAt);
         const end = Date.parse(e.endedAt);
