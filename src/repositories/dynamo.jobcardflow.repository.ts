@@ -149,10 +149,13 @@ export const setJobCardTotal = (jobCardId: string, totalMinutes: number) =>
 
 // ---------- submissions (results) ----------
 /** Results still waiting to be handled, oldest first. Found through the sparse deliveryState index. */
-export const listPendingSubmissions = (limit = 100) =>
-  queryAll(table('submission'), INDEX.submissionsByDeliveryState, 'deliveryState', 'PENDING', {
+export const listSubmissionsByDeliveryState = (state: 'PENDING' | 'FAILED' | 'SENT', limit = 100) =>
+  queryAll(table('submission'), INDEX.submissionsByDeliveryState, 'deliveryState', state, {
     limit,
   });
+
+export const listPendingSubmissions = (limit = 100) =>
+  listSubmissionsByDeliveryState('PENDING', limit);
 
 /** Latest result first. */
 export const listSubmissionsByModule = (moduleId: string) =>

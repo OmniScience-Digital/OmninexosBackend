@@ -1,4 +1,4 @@
-// src/helper/jobcard/timeTracking.ts 
+// src/helper/jobcard/timeTracking.ts
 // The "stop the timer" rule, identical to the web app's (src/utils/helper/jobCardTime.ts). Pure, no I/O.
 //
 //  - Entries are per user per job card and are opened by the apps when a user engages.

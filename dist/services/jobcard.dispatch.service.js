@@ -2,7 +2,7 @@
 import logger from "../utils/logger.js";
 import { certificatesEnabled, CALIBRATION_TYPES } from "../helper/jobcard/jobcard.config.js";
 import { clampEnd, mergedMinutesTotal, isOpen, minutesBetween, planStop, } from "../helper/jobcard/timeTracking.js";
-import { formatForClickUp, formatForTelegram, photoEntries, } from "../helper/jobcard/resultFormat.js";
+import { countPhotos, formatForClickUp, formatForTelegram, photoEntries, } from "../helper/jobcard/resultFormat.js";
 import { PhotoMissingError } from "./jobcard.photos.service.js";
 import { issueCertificateIfReady, renderCertificatePdf, uploadCertificatePdf, } from "./certificate.service.js";
 import { getDefaultGroupLock } from "./group-lock.service.js";
@@ -11,8 +11,19 @@ export const WAIT_CAP_MS = 7 * 24 * 3600000;
 const WAIT_RECHECK_MS = 2 * 60000;
 const LEASE_MS = 2 * 60000;
 const GROUP_LOCK_TTL_MS = 10 * 60000;
+/** A FAILED submission is retried automatically once every hour, up to this long after it was submitted. */
+export const AUTO_RETRY_COOLDOWN_MS = 60 * 60000; // 1 hour between automatic attempts
+export const AUTO_RETRY_MAX_AGE_MS = 24 * 60 * 60000; // stop auto-retrying after 24 hours
 /** ClickUp error code emitted when the workspace's storage quota is exhausted. */
 const CLICKUP_STORAGE_ERROR = "GBUSED_005";
+/**
+ * ClickUp error codes that will never succeed on retry. These are workspace-level problems (task deleted, task
+ * moved, the authorising user lost access) — retrying burns 2 hours and fails at the end anyway.
+ *   ACCESS_083 - "You do not have access to this task" (task in a list the token cannot see, or deleted)
+ *   OAUTH_0xx / TOKEN_0xx - authorisation lost (token revoked or expired, no re-auth path here)
+ */
+const CLICKUP_PERMANENT_ERRORS = ["ACCESS_083", "OAUTH_0", "TOKEN_0"];
+const isPermanentClickUpError = (message) => CLICKUP_PERMANENT_ERRORS.some((code) => message.includes(code));
 export const retryDelayMs = (attempts) => Math.min(2 ** Math.max(0, attempts - 1), 60) * 60000;
 const msg = (e) => (e instanceof Error ? e.message : String(e));
 const parsePayload = (p) => {
@@ -44,8 +55,6 @@ export async function processPendingSubmissions(deps, batch = 25) {
             stopped.set(jobCardId, stopTimerIfComplete(deps, jobCardId));
         return stopped.get(jobCardId);
     };
-    // Results for the same Telegram group go out in order. A result that has to wait holds back only the later
-    // results of ITS group (or of its own job card when it has no group yet), never every other job card.
     const jobCards = new Map();
     const orderKey = async (sub) => {
         if (!jobCards.has(sub.jobCardId))
@@ -157,20 +166,22 @@ async function processSubmission(deps, sub, stopTimer) {
     logger.info(`[dispatch] sub=${sub.id} initial clickup=${clickup} telegram=${telegram}`);
     if (clickup !== "SENT" || telegram !== "SENT") {
         logger.info(`[dispatch] sub=${sub.id} building texts`);
-        // buildTexts also returns the scale name so photo labels can include it.
         const text = await buildTexts(deps, sub, jobCard);
-        // Photo labels carry scale name + submission date, e.g.
-        //   "Actual — Avery 1064 — 22 Oct 2026"
+        const payload = parsePayload(sub.payload);
+        const payloadPhotos = countPhotos(payload);
         const photos = deps.loadPhoto
-            ? photoEntries(parsePayload(sub.payload), {
+            ? photoEntries(payload, {
                 scaleName: text.scaleName,
                 submittedAt: sub.submittedAt,
             })
             : [];
-        logger.info(`[dispatch] sub=${sub.id} loadPhoto=${deps.loadPhoto ? "wired" : "MISSING"} photos=${photos.length} keys=[${photos.map((p) => p.key).join(", ")}]`);
+        logger.info(`[dispatch] sub=${sub.id} loadPhoto=${deps.loadPhoto ? "wired" : "MISSING"} photos=${photos.length} payloadPhotos=${payloadPhotos} keys=[${photos.map((p) => p.key).join(", ")}]`);
         logger.info(`[dispatch] sub=${sub.id} photo labels=[${photos.map((p) => p.label).join(" | ")}]`);
-        if (photos.length === 0) {
-            logger.warn(`[dispatch] sub=${sub.id} payload has no photo entries — nothing will be uploaded`);
+        if (photos.length === 0 && payloadPhotos > 0) {
+            // The payload declares photos but they could not be enumerated — something is wrong at the payload level.
+            logger.error(`[dispatch] sub=${sub.id} payload has ${payloadPhotos} photo entries but photoEntries returned 0 — ` +
+                `check loadPhoto/photoEntries wiring`);
+            errors.push(`Photos: ${payloadPhotos} declared in payload but none could be listed`);
         }
         const saveProgress = async (patch) => {
             Object.assign(progress, patch);
@@ -196,8 +207,15 @@ async function processSubmission(deps, sub, stopTimer) {
                 waiting = true;
                 notes.push("No ClickUp task on the job card yet");
             }
+            else if (photos.length > 0 && !deps.attachClickUpFile) {
+                // Photos exist in the payload but ClickUp upload is not wired. Marking ClickUp SENT here would be a lie:
+                // the text goes out but the images never do. Fail the channel so the submission retries (or gives up
+                // after MAX_ATTEMPTS), and the deliveryError records the reason.
+                logger.error(`[dispatch] sub=${sub.id} attachClickUpFile is NOT wired — refusing to mark ClickUp SENT`);
+                errors.push("ClickUp: attachClickUpFile is not wired");
+                clickup = "FAILED";
+            }
             else {
-                let clickupPhotosOk = true;
                 try {
                     logger.info(`[dispatch] sub=${sub.id} ClickUp taskId=${jobCard.clickupTaskId} attachClickUpFile=${deps.attachClickUpFile ? "wired" : "MISSING"}`);
                     if (!(sub.clickupTextSent === true)) {
@@ -208,18 +226,13 @@ async function processSubmission(deps, sub, stopTimer) {
                     else {
                         logger.info(`[dispatch] sub=${sub.id} ClickUp text already sent — skipping`);
                     }
-                    if (!deps.attachClickUpFile) {
-                        logger.warn(`[dispatch] sub=${sub.id} attachClickUpFile is NOT wired — photos will be skipped entirely`);
-                    }
                     const done = new Set(sub.clickupPhotosSent ?? []);
                     logger.info(`[dispatch] sub=${sub.id} ClickUp photos already sent=${done.size} of ${photos.length}`);
+                    let clickupPhotosOk = true;
+                    let permanentClickupError = null;
                     for (const p of photos) {
                         if (done.has(p.key)) {
                             logger.info(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} already sent — skip`);
-                            continue;
-                        }
-                        if (!deps.attachClickUpFile) {
-                            logger.warn(`[dispatch] sub=${sub.id} ClickUp photo key=${p.key} skipped — no attachClickUpFile wired`);
                             continue;
                         }
                         logger.info(`[dispatch] sub=${sub.id} ClickUp loading photo key=${p.key} label=${p.label}`);
@@ -243,6 +256,15 @@ async function processSubmission(deps, sub, stopTimer) {
                                 notes.push("ClickUp storage quota exhausted \u2014 some photos not uploaded");
                                 continue;
                             }
+                            if (isPermanentClickUpError(errorMessage)) {
+                                // ACCESS_083 and friends: retrying will not help. Stop trying ClickUp photos for this submission,
+                                // record the error, and let finish() mark ClickUp FAILED. This saves 2 hours per submission.
+                                logger.error(`[dispatch] sub=${sub.id} ClickUp PERMANENT error for key=${p.key}: ${errorMessage} — ` +
+                                    `not retrying; fix the task in ClickUp`);
+                                clickupPhotosOk = false;
+                                permanentClickupError = errorMessage;
+                                break;
+                            }
                             logger.error(`[dispatch] sub=${sub.id} ClickUp upload failed key=${p.key}: ${errorMessage}`, uploadError);
                             throw uploadError;
                         }
@@ -250,7 +272,12 @@ async function processSubmission(deps, sub, stopTimer) {
                         done.add(p.key);
                         await saveProgress({ clickupPhotosSent: [...done] });
                     }
-                    if (clickupPhotosOk) {
+                    if (permanentClickupError) {
+                        errors.push(`ClickUp: ${permanentClickupError}`);
+                        clickup = "FAILED";
+                        logger.error(`[dispatch] sub=${sub.id} ClickUp FAILED (permanent) after photos=${done.size}/${photos.length}`);
+                    }
+                    else if (clickupPhotosOk) {
                         clickup = "SENT";
                         logger.info(`[dispatch] sub=${sub.id} ClickUp SENT (photos=${done.size}/${photos.length})`);
                     }
@@ -266,83 +293,101 @@ async function processSubmission(deps, sub, stopTimer) {
             }
         }
         if (telegram !== "SENT") {
-            const group = jobCard.telegramGroupId
-                ? await repo.getTelegramGroup(jobCard.telegramGroupId)
-                : null;
-            if (!group || group.active === false) {
-                logger.info(`[dispatch] sub=${sub.id} no active Telegram group — waiting`);
-                waiting = true;
-                notes.push(group ? "The linked Telegram group is inactive" : "No Telegram group linked yet");
+            if (photos.length > 0 && !deps.sendTelegramPhotos) {
+                // Same reasoning as ClickUp: photos exist but Telegram photo upload is not wired. Refuse to mark SENT.
+                logger.error(`[dispatch] sub=${sub.id} sendTelegramPhotos is NOT wired — refusing to mark Telegram SENT`);
+                errors.push("Telegram: sendTelegramPhotos is not wired");
+                telegram = "FAILED";
             }
             else {
-                const chatId = String(group.chatId);
-                const ownerId = String(sub.id);
-                logger.info(`[dispatch] sub=${sub.id} Telegram group chatId=${chatId}`);
-                let shouldProceed = true;
-                let holdLock = false;
-                if (deps.groupLock) {
-                    try {
-                        holdLock = await deps.groupLock.acquire(chatId, ownerId, GROUP_LOCK_TTL_MS);
-                        logger.info(`[dispatch] sub=${sub.id} lock acquire => ${holdLock}`);
-                        if (!holdLock) {
-                            shouldProceed = false;
-                            waiting = true;
-                            notes.push("Another dispatcher is delivering to this group");
-                        }
-                    }
-                    catch (e) {
-                        logger.warn(`[dispatch] sub=${sub.id} lock unavailable (${msg(e)}) — proceeding without lock`);
-                        shouldProceed = true;
-                        holdLock = false;
-                    }
+                const group = jobCard.telegramGroupId
+                    ? await repo.getTelegramGroup(jobCard.telegramGroupId)
+                    : null;
+                if (!group || group.active === false) {
+                    logger.info(`[dispatch] sub=${sub.id} no active Telegram group — waiting`);
+                    waiting = true;
+                    notes.push(group ? "The linked Telegram group is inactive" : "No Telegram group linked yet");
                 }
                 else {
-                    logger.warn(`[dispatch] sub=${sub.id} no groupLock provided — cross-instance ordering OFF`);
-                }
-                if (shouldProceed) {
-                    try {
-                        if (!(sub.telegramTextSent === true)) {
-                            logger.info(`[dispatch] sub=${sub.id} sending Telegram text`);
-                            if (!(await deps.sendTelegram(chatId, text.telegram)))
-                                throw new Error("message was not accepted");
-                            await saveProgress({ telegramTextSent: true });
-                        }
-                        else {
-                            logger.info(`[dispatch] sub=${sub.id} Telegram text already sent — skipping`);
-                        }
-                        const done = new Set(sub.telegramPhotosSent ?? []);
-                        const todo = photos.filter((p) => !done.has(p.key));
-                        logger.info(`[dispatch] sub=${sub.id} Telegram photos to send=${todo.length}`);
-                        for (let i = 0; i < todo.length && deps.sendTelegramPhotos; i += 10) {
-                            const chunk = todo.slice(i, i + 10);
-                            const files = [];
-                            for (const p of chunk) {
-                                const file = await loadOne(p);
-                                if (file)
-                                    files.push({ ...file, caption: p.label });
+                    const chatId = String(group.chatId);
+                    const ownerId = String(sub.id);
+                    logger.info(`[dispatch] sub=${sub.id} Telegram group chatId=${chatId}`);
+                    let shouldProceed = true;
+                    let holdLock = false;
+                    if (deps.groupLock) {
+                        try {
+                            holdLock = await deps.groupLock.acquire(chatId, ownerId, GROUP_LOCK_TTL_MS);
+                            logger.info(`[dispatch] sub=${sub.id} lock acquire => ${holdLock}`);
+                            if (!holdLock) {
+                                shouldProceed = false;
+                                waiting = true;
+                                notes.push("Another dispatcher is delivering to this group");
                             }
-                            logger.info(`[dispatch] sub=${sub.id} sending photo album size=${files.length}`);
-                            if (files.length && !(await deps.sendTelegramPhotos(chatId, files)))
-                                throw new Error("photos were not accepted");
-                            for (const p of chunk)
-                                done.add(p.key);
-                            await saveProgress({ telegramPhotosSent: [...done] });
                         }
-                        telegram = "SENT";
-                        logger.info(`[dispatch] sub=${sub.id} Telegram SENT`);
+                        catch (e) {
+                            logger.warn(`[dispatch] sub=${sub.id} lock unavailable (${msg(e)}) — proceeding without lock`);
+                            shouldProceed = true;
+                            holdLock = false;
+                        }
                     }
-                    catch (e) {
-                        logger.error(`[dispatch] sub=${sub.id} Telegram failed: ${msg(e)}`, e);
-                        errors.push(`Telegram: ${msg(e)}`);
+                    else {
+                        logger.warn(`[dispatch] sub=${sub.id} no groupLock provided — cross-instance ordering OFF`);
                     }
-                    finally {
-                        if (holdLock && deps.groupLock) {
-                            try {
-                                await deps.groupLock.release(chatId, ownerId);
-                                logger.info(`[dispatch] sub=${sub.id} lock released`);
+                    if (shouldProceed) {
+                        try {
+                            if (!(sub.telegramTextSent === true)) {
+                                logger.info(`[dispatch] sub=${sub.id} sending Telegram text`);
+                                if (!(await deps.sendTelegram(chatId, text.telegram)))
+                                    throw new Error("message was not accepted");
+                                await saveProgress({ telegramTextSent: true });
                             }
-                            catch (e) {
-                                logger.warn(`[dispatch] sub=${sub.id} lock release failed (${msg(e)})`);
+                            else {
+                                logger.info(`[dispatch] sub=${sub.id} Telegram text already sent — skipping`);
+                            }
+                            const done = new Set(sub.telegramPhotosSent ?? []);
+                            const todo = photos.filter((p) => !done.has(p.key));
+                            logger.info(`[dispatch] sub=${sub.id} Telegram photos to send=${todo.length}`);
+                            for (let i = 0; i < todo.length; i += 10) {
+                                const chunk = todo.slice(i, i + 10);
+                                const files = [];
+                                for (const p of chunk) {
+                                    const file = await loadOne(p);
+                                    if (file)
+                                        files.push({ ...file, caption: p.label });
+                                }
+                                logger.info(`[dispatch] sub=${sub.id} sending photo album size=${files.length}`);
+                                if (files.length && !(await deps.sendTelegramPhotos(chatId, files)))
+                                    throw new Error("photos were not accepted");
+                                if (files.length) {
+                                    for (const p of chunk)
+                                        done.add(p.key);
+                                    await saveProgress({ telegramPhotosSent: [...done] });
+                                }
+                                else {
+                                    // Every photo in this chunk was unloadable. Text went out; images did not. Rather than
+                                    // silently marking SENT (which hides the missing images from the office), fail the channel so
+                                    // the submission retries. PhotoMissingError is already handled in loadOne and logged, so a
+                                    // persistent missing-photo case will exhaust MAX_ATTEMPTS and end up FAILED with the reason
+                                    // recorded in deliveryError.
+                                    throw new Error(`photos declared in payload could not be loaded (${chunk.length} in this chunk)`);
+                                }
+                            }
+                            telegram = "SENT";
+                            logger.info(`[dispatch] sub=${sub.id} Telegram SENT`);
+                        }
+                        catch (e) {
+                            logger.error(`[dispatch] sub=${sub.id} Telegram failed: ${msg(e)}`, e);
+                            errors.push(`Telegram: ${msg(e)}`);
+                        }
+                        finally {
+                            if (holdLock && deps.groupLock) {
+                                try {
+                                    await deps.groupLock.release(chatId, ownerId);
+                                    logger.info(`[dispatch] sub=${sub.id} lock released`);
+                                }
+                                catch (e) {
+                                    logger.warn(`[dispatch] sub=${sub.id} lock release failed (${msg(e)})`);
+                                }
                             }
                         }
                     }
@@ -380,14 +425,22 @@ async function processSubmission(deps, sub, stopTimer) {
 }
 async function finish(deps, sub, status, error, attempts) {
     const f = (c) => (c === "SENT" ? "SENT" : "FAILED");
-    logger.info(`[dispatch] finish sub=${sub.id} clickup=${f(status.clickup)} telegram=${f(status.telegram)} error=${error ?? "none"}`);
+    const finalClickup = f(status.clickup);
+    const finalTelegram = f(status.telegram);
+    const allSent = finalClickup === "SENT" && finalTelegram === "SENT";
+    // deliveryState is what the frontend reads to distinguish a delivered result from a failed delivery. It must
+    // be SET to the final value, not removed: the previous version had `deliveryState` in the REMOVE list, so every
+    // finished submission ended up with deliveryState empty. The app could then never show a failure, and the pull
+    // queries by deliveryState = PENDING missed delivered rows entirely.
+    logger.info(`[dispatch] finish sub=${sub.id} clickup=${finalClickup} telegram=${finalTelegram} deliveryState=${allSent ? "SENT" : "FAILED"} error=${error ?? "none"}`);
     await deps.repo.updateSubmission(sub.id, {
-        clickupStatus: f(status.clickup),
-        telegramStatus: f(status.telegram),
+        clickupStatus: finalClickup,
+        telegramStatus: finalTelegram,
+        deliveryState: allSent ? "SENT" : "FAILED",
         deliveryAttempts: attempts,
         deliveredAt: deps.now().toISOString(),
         deliveryError: error,
-    }, ["deliveryState", "lockedUntil", "nextAttemptAt", ...(error ? [] : ["deliveryError"])]);
+    }, ["lockedUntil", "nextAttemptAt", ...(error ? [] : ["deliveryError"])]);
 }
 async function recordUnexpectedFailure(deps, sub, error) {
     const attempts = (Number(sub.deliveryAttempts) || 0) + 1;
@@ -405,6 +458,49 @@ async function recordUnexpectedFailure(deps, sub, error) {
         nextAttemptAt: new Date(deps.now().getTime() + retryDelayMs(attempts)).toISOString(),
     }, ["lockedUntil"]);
     return false;
+}
+/**
+ * Move FAILED submissions back to PENDING so the dispatcher tries again.
+ *
+ *   requeueFailedSubmissions(deps)                          → auto-retry everything due (hourly cooldown, 24h max)
+ *   requeueFailedSubmissions(deps, { jobCardId: 'JC-...' }) → auto-retry one job card's failures
+ *   requeueFailedSubmissions(deps, { submissionId: '...', force: true })
+ *                                                            → retry one submission NOW (after fixing ClickUp, quota, group)
+ *
+ * Only the failed channels are retried: clickupTextSent / telegramTextSent / *_PhotosSent are kept, so text is
+ * never re-sent and photos already delivered are not uploaded again. deliveryAttempts resets to 0 so the dispatcher
+ * gets a fresh burst of retries.
+ */
+export async function requeueFailedSubmissions(deps, opts = {}) {
+    const { repo, now } = deps;
+    const failures = await repo.listSubmissionsByDeliveryState("FAILED", 100);
+    const nowIso = now().toISOString();
+    const nowMs = now().getTime();
+    let count = 0;
+    for (const sub of failures) {
+        if (opts.jobCardId && sub.jobCardId !== opts.jobCardId)
+            continue;
+        if (opts.submissionId && sub.id !== opts.submissionId)
+            continue;
+        if (!opts.force) {
+            const delivered = Date.parse(String(sub.deliveredAt ?? sub.updatedAt ?? ""));
+            if (!Number.isFinite(delivered) || nowMs - delivered < AUTO_RETRY_COOLDOWN_MS)
+                continue;
+            const submitted = Date.parse(String(sub.submittedAt ?? ""));
+            if (!Number.isFinite(submitted) || nowMs - submitted > AUTO_RETRY_MAX_AGE_MS)
+                continue;
+        }
+        await repo.updateSubmission(sub.id, {
+            deliveryState: "PENDING",
+            clickupStatus: sub.clickupStatus === "SENT" ? "SENT" : "PENDING",
+            telegramStatus: sub.telegramStatus === "SENT" ? "SENT" : "PENDING",
+            deliveryAttempts: 0,
+            nextAttemptAt: nowIso,
+        }, ["deliveryError", "deliveredAt", "lockedUntil"]);
+        logger.info(`[dispatch] requeued sub=${sub.id} jc=${sub.jobCardId} force=${!!opts.force}`);
+        count += 1;
+    }
+    return count;
 }
 async function buildTexts(deps, sub, jobCard) {
     const { repo } = deps;
