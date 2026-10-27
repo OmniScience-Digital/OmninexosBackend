@@ -64,8 +64,16 @@ export class TelegramService {
         }
         return false;
     }
+    /**
+     * Resize a photo for Telegram and GUARANTEE valid dimensions.
+     *
+     * Telegram rejects photos with width/height 0, sum(width,height) > 10000, or aspect ratio > 20:1 with
+     * PHOTO_INVALID_DIMENSIONS. Sharp's `fit: 'inside'` on a truncated or unusually shaped image can produce
+     * exactly that (e.g. 2000x8 from a partially uploaded file). This method checks the output dimensions and,
+     * if the result is not Telegram-safe, falls back to a padded 1000x1000 canvas — always valid.
+     */
     async preparePhoto(data) {
-        return sharp(data, { failOn: "none" })
+        const first = await sharp(data, { failOn: "none" })
             .rotate()
             .resize({
             width: 2560,
@@ -76,25 +84,39 @@ export class TelegramService {
             .flatten({ background: "#ffffff" })
             .jpeg({ quality: 85 })
             .toBuffer();
+        const meta = await sharp(first).metadata();
+        const w = meta.width ?? 0;
+        const h = meta.height ?? 0;
+        const minDim = Math.min(w, h);
+        const maxDim = Math.max(w, h);
+        const aspect = minDim > 0 ? maxDim / minDim : 0;
+        if (w >= 100 && h >= 100 && w + h <= 10000 && aspect <= 20) {
+            return first;
+        }
+        logger.warn(`[telegram] preparePhoto: bad dims ${w}x${h} (aspect ${aspect.toFixed(1)}), ` +
+            `falling back to padded 1000x1000`);
+        // Pad to exactly 1000x1000. `fit: 'contain'` scales the image to fit inside 1000x1000 preserving
+        // aspect ratio, then pads with white to fill. Output dimensions are guaranteed 1000x1000, which is
+        // always valid for Telegram.
+        return sharp(data, { failOn: "none" })
+            .rotate()
+            .flatten({ background: "#ffffff" })
+            .resize({
+            width: 1000,
+            height: 1000,
+            fit: "contain",
+            background: "#ffffff",
+            withoutEnlargement: false,
+        })
+            .jpeg({ quality: 85 })
+            .toBuffer();
     }
-    /**
-     * Send one photo or an album.
-     *
-     * Returns `true` on success. THROWS on any failure — with the real Telegram reason in the message — so the
-     * caller can record WHY it failed (into deliveryError) instead of a generic "photos were not accepted".
-     *
-     * The thrown message is short and safe for DynamoDB: it names the Telegram HTTP status and description, e.g.
-     *   "Telegram sendMediaGroup rejected: 400 Bad Request: PHOTO_INVALID_DIMENSIONS"
-     *   "Telegram sendPhoto timed out after 3 attempts: timeout of 60000ms exceeded"
-     *   "Telegram photo prepare failed: Input buffer contains unsupported image format"
-     */
     async sendPhotos(chatId, photos, options) {
         return (this.messageQueue = this.messageQueue.then(async () => {
             if (photos.length === 0)
                 return true;
             const maxRetries = options?.maxRetries ?? 3;
             const retryDelay = options?.retryDelay ?? 2000;
-            // Sharp resize is expensive; do it once. A sharp failure is not transient.
             let prepared;
             try {
                 prepared = await Promise.all(photos.map(async (p) => ({
@@ -112,9 +134,7 @@ export class TelegramService {
             const method = prepared.length === 1 ? "sendPhoto" : "sendMediaGroup";
             const totalBytes = prepared.reduce((n, p) => n + p.data.length, 0);
             logger.info(`[telegram] ${method} chatId=${chatId} photos=${prepared.length} totalBytes=${totalBytes} ` +
-                `sizes=[${prepared.map((p) => p.data.length).join(",")}] captions=[${prepared
-                    .map((p) => (p.caption ? p.caption.slice(0, 40) : "-"))
-                    .join(" | ")}]`);
+                `sizes=[${prepared.map((p) => p.data.length).join(",")}]`);
             let lastError = "unknown error";
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
@@ -152,19 +172,16 @@ export class TelegramService {
                         logger.info(`[telegram] ${method} OK after attempt ${attempt}`);
                         return true;
                     }
-                    // Telegram said ok:false — read the description and either retry or throw
                     const description = String(response.data.description ?? "unknown error from Telegram");
                     const errorCode = Number(response.data.error_code ?? 0);
                     lastError = `${errorCode} ${description}`;
                     logger.error(`[telegram] ${method} attempt ${attempt}/${maxRetries} — response not ok: ${lastError}`);
-                    // 400/403/413 are permanent
                     if (errorCode >= 400 && errorCode < 500 && errorCode !== 429) {
                         throw new Error(`Telegram ${method} rejected: ${lastError}`);
                     }
                 }
                 catch (error) {
                     if (error instanceof Error && error.message.startsWith("Telegram ")) {
-                        // Our own throw from the ok:false branch — do not retry
                         throw error;
                     }
                     const axiosError = error;
@@ -173,7 +190,6 @@ export class TelegramService {
                     const description = data?.description ?? axiosError.message;
                     lastError = `${status ?? "n/a"} ${description}`;
                     logger.error(`[telegram] ${method} attempt ${attempt}/${maxRetries} failed: ${lastError}`);
-                    // 4xx (except 429) is permanent: bad request, payload too large, bot not in chat
                     if (status && status >= 400 && status < 500 && status !== 429) {
                         throw new Error(`Telegram ${method} rejected: ${lastError}`);
                     }
