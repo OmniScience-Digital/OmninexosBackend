@@ -39,7 +39,7 @@ export type FlowRepo = Pick<
   | 'listJobCardsAwaitingWrapUp'
   | 'setJobCardFields'
   | 'listPendingSubmissions'
-  | 'listSubmissionsByDeliveryState' // ← NEW
+  | 'listSubmissionsByDeliveryState'
   | 'claimSubmission'
   | 'updateSubmission'
   | 'listSubmissionsByModule'
@@ -71,21 +71,13 @@ export const WAIT_CAP_MS = 7 * 24 * 3600_000;
 const WAIT_RECHECK_MS = 2 * 60_000;
 const LEASE_MS = 2 * 60_000;
 const GROUP_LOCK_TTL_MS = 10 * 60_000;
-/** A FAILED submission is retried automatically once every hour, up to this long after it was submitted. */
-export const AUTO_RETRY_COOLDOWN_MS = 60 * 60_000; // 1 hour between automatic attempts
-export const AUTO_RETRY_MAX_AGE_MS = 24 * 60 * 60_000; // stop auto-retrying after 24 hours
 
-/** ClickUp error code emitted when the workspace's storage quota is exhausted. */
+export const HOLD_MAX_AGE_MS = 30 * 60_000;
+export const AUTO_RETRY_COOLDOWN_MS = 60 * 60_000;
+export const AUTO_RETRY_MAX_AGE_MS = 24 * 60 * 60_000;
+
 const CLICKUP_STORAGE_ERROR = 'GBUSED_005';
-
-/**
- * ClickUp error codes that will never succeed on retry. These are workspace-level problems (task deleted, task
- * moved, the authorising user lost access) — retrying burns 2 hours and fails at the end anyway.
- *   ACCESS_083 - "You do not have access to this task" (task in a list the token cannot see, or deleted)
- *   OAUTH_0xx / TOKEN_0xx - authorisation lost (token revoked or expired, no re-auth path here)
- */
 const CLICKUP_PERMANENT_ERRORS = ['ACCESS_083', 'OAUTH_0', 'TOKEN_0'] as const;
-
 const isPermanentClickUpError = (message: string): boolean =>
   CLICKUP_PERMANENT_ERRORS.some((code) => message.includes(code));
 
@@ -166,14 +158,35 @@ export async function processPendingSubmissions(
     }
 
     if (sub.nextAttemptAt && Date.parse(sub.nextAttemptAt) > nowMs) {
-      if (!telegramDoneInDb) held.add(key);
-      logger.info(`[dispatch] sub=${sub.id} not due yet`);
+      const ageMs = nowMs - Date.parse(String(sub.submittedAt ?? ''));
+      const ageText = Number.isFinite(ageMs) ? `${Math.round(ageMs / 60_000)}min` : '?';
+      if (!telegramDoneInDb && ageMs < HOLD_MAX_AGE_MS) {
+        held.add(key);
+        logger.info(`[dispatch] sub=${sub.id} not due yet (age ${ageText}) — holding ${key}`);
+      } else {
+        logger.warn(
+          `[dispatch] sub=${sub.id} not due yet but age ${ageText} ≥ ${Math.round(
+            HOLD_MAX_AGE_MS / 60_000
+          )}min — releasing order on ${key}`
+        );
+      }
       continue;
     }
 
     const claimed = await repo.claimSubmission(sub.id, nowMs, LEASE_MS);
     if (!claimed) {
-      if (!telegramDoneInDb) held.add(key);
+      if (!telegramDoneInDb) {
+        const ageMs = nowMs - Date.parse(String(sub.submittedAt ?? ''));
+        if (ageMs < HOLD_MAX_AGE_MS) {
+          held.add(key);
+        } else {
+          logger.warn(
+            `[dispatch] sub=${sub.id} claim failed but age ≥ ${Math.round(
+              HOLD_MAX_AGE_MS / 60_000
+            )}min — not holding ${key}`
+          );
+        }
+      }
       logger.info(`[dispatch] sub=${sub.id} claim failed (another worker has it)`);
       continue;
     }
@@ -192,7 +205,18 @@ export async function processPendingSubmissions(
       }
 
       summary.retrying += 1;
-      if (!outcome.telegramDone) held.add(key);
+      if (!outcome.telegramDone) {
+        const ageMs = nowMs - Date.parse(String(sub.submittedAt ?? ''));
+        if (ageMs < HOLD_MAX_AGE_MS) {
+          held.add(key);
+        } else {
+          logger.warn(
+            `[dispatch] sub=${sub.id} failed but age ≥ ${Math.round(
+              HOLD_MAX_AGE_MS / 60_000
+            )}min — not holding ${key}`
+          );
+        }
+      }
     } catch (e) {
       logger.error(`[dispatch] sub=${sub.id} unexpected failure: ${msg(e)}`, e);
       const finished = await recordUnexpectedFailure(deps, sub, msg(e));
@@ -202,7 +226,16 @@ export async function processPendingSubmissions(
         continue;
       }
       summary.retrying += 1;
-      held.add(key);
+      const ageMs = nowMs - Date.parse(String(sub.submittedAt ?? ''));
+      if (ageMs < HOLD_MAX_AGE_MS) {
+        held.add(key);
+      } else {
+        logger.warn(
+          `[dispatch] sub=${sub.id} unexpected failure but age ≥ ${Math.round(
+            HOLD_MAX_AGE_MS / 60_000
+          )}min — not holding ${key}`
+        );
+      }
     }
   }
 
@@ -234,6 +267,41 @@ export async function stopTimerIfComplete(
   }
   await repo.setJobCardTotal(jobCardId, mergedMinutesTotal(await repo.listTimeEntries(jobCardId)));
   logger.info(`[dispatch] stopTimer jc=${jobCardId} stopped (${plan.reason})`);
+}
+
+export async function requeueFailedSubmissions(
+  deps: Pick<DispatchDeps, 'repo' | 'now'>,
+  opts: { jobCardId?: string; submissionId?: string; force?: boolean } = {}
+): Promise<number> {
+  const { repo, now } = deps;
+  const failures = await repo.listSubmissionsByDeliveryState('FAILED', 100);
+  const nowIso = now().toISOString();
+  const nowMs = now().getTime();
+  let count = 0;
+  for (const sub of failures) {
+    if (opts.jobCardId && sub.jobCardId !== opts.jobCardId) continue;
+    if (opts.submissionId && sub.id !== opts.submissionId) continue;
+    if (!opts.force) {
+      const delivered = Date.parse(String(sub.deliveredAt ?? sub.updatedAt ?? ''));
+      if (!Number.isFinite(delivered) || nowMs - delivered < AUTO_RETRY_COOLDOWN_MS) continue;
+      const submitted = Date.parse(String(sub.submittedAt ?? ''));
+      if (!Number.isFinite(submitted) || nowMs - submitted > AUTO_RETRY_MAX_AGE_MS) continue;
+    }
+    await repo.updateSubmission(
+      sub.id,
+      {
+        deliveryState: 'PENDING',
+        clickupStatus: sub.clickupStatus === 'SENT' ? 'SENT' : 'PENDING',
+        telegramStatus: sub.telegramStatus === 'SENT' ? 'SENT' : 'PENDING',
+        deliveryAttempts: 0,
+        nextAttemptAt: nowIso,
+      },
+      ['deliveryError', 'deliveredAt', 'lockedUntil']
+    );
+    logger.info(`[dispatch] requeued sub=${sub.id} jc=${sub.jobCardId} force=${!!opts.force}`);
+    count += 1;
+  }
+  return count;
 }
 
 async function processSubmission(
@@ -303,10 +371,8 @@ async function processSubmission(
       `[dispatch] sub=${sub.id} photo labels=[${photos.map((p) => p.label).join(' | ')}]`
     );
     if (photos.length === 0 && payloadPhotos > 0) {
-      // The payload declares photos but they could not be enumerated — something is wrong at the payload level.
       logger.error(
-        `[dispatch] sub=${sub.id} payload has ${payloadPhotos} photo entries but photoEntries returned 0 — ` +
-          `check loadPhoto/photoEntries wiring`
+        `[dispatch] sub=${sub.id} payload has ${payloadPhotos} photo entries but photoEntries returned 0`
       );
       errors.push(`Photos: ${payloadPhotos} declared in payload but none could be listed`);
     }
@@ -335,9 +401,6 @@ async function processSubmission(
         waiting = true;
         notes.push('No ClickUp task on the job card yet');
       } else if (photos.length > 0 && !deps.attachClickUpFile) {
-        // Photos exist in the payload but ClickUp upload is not wired. Marking ClickUp SENT here would be a lie:
-        // the text goes out but the images never do. Fail the channel so the submission retries (or gives up
-        // after MAX_ATTEMPTS), and the deliveryError records the reason.
         logger.error(
           `[dispatch] sub=${sub.id} attachClickUpFile is NOT wired — refusing to mark ClickUp SENT`
         );
@@ -400,11 +463,8 @@ async function processSubmission(
                 continue;
               }
               if (isPermanentClickUpError(errorMessage)) {
-                // ACCESS_083 and friends: retrying will not help. Stop trying ClickUp photos for this submission,
-                // record the error, and let finish() mark ClickUp FAILED. This saves 2 hours per submission.
                 logger.error(
-                  `[dispatch] sub=${sub.id} ClickUp PERMANENT error for key=${p.key}: ${errorMessage} — ` +
-                    `not retrying; fix the task in ClickUp`
+                  `[dispatch] sub=${sub.id} ClickUp PERMANENT error for key=${p.key}: ${errorMessage}`
                 );
                 clickupPhotosOk = false;
                 permanentClickupError = errorMessage;
@@ -447,7 +507,6 @@ async function processSubmission(
 
     if (telegram !== 'SENT') {
       if (photos.length > 0 && !deps.sendTelegramPhotos) {
-        // Same reasoning as ClickUp: photos exist but Telegram photo upload is not wired. Refuse to mark SENT.
         logger.error(
           `[dispatch] sub=${sub.id} sendTelegramPhotos is NOT wired — refusing to mark Telegram SENT`
         );
@@ -514,17 +573,13 @@ async function processSubmission(
                   if (file) files.push({ ...file, caption: p.label });
                 }
                 logger.info(`[dispatch] sub=${sub.id} sending photo album size=${files.length}`);
-                if (files.length && !(await deps.sendTelegramPhotos!(chatId, files)))
-                  throw new Error('photos were not accepted');
                 if (files.length) {
+                  // sendTelegramPhotos THROWS with the real reason on failure. Nothing to check for `false`
+                  // here — either it succeeds or it throws, and the throw carries the Telegram response.
+                  await deps.sendTelegramPhotos!(chatId, files);
                   for (const p of chunk) done.add(p.key);
                   await saveProgress({ telegramPhotosSent: [...done] });
                 } else {
-                  // Every photo in this chunk was unloadable. Text went out; images did not. Rather than
-                  // silently marking SENT (which hides the missing images from the office), fail the channel so
-                  // the submission retries. PhotoMissingError is already handled in loadOne and logged, so a
-                  // persistent missing-photo case will exhaust MAX_ATTEMPTS and end up FAILED with the reason
-                  // recorded in deliveryError.
                   throw new Error(
                     `photos declared in payload could not be loaded (${chunk.length} in this chunk)`
                   );
@@ -610,10 +665,6 @@ async function finish(
   const finalTelegram = f(status.telegram);
   const allSent = finalClickup === 'SENT' && finalTelegram === 'SENT';
 
-  // deliveryState is what the frontend reads to distinguish a delivered result from a failed delivery. It must
-  // be SET to the final value, not removed: the previous version had `deliveryState` in the REMOVE list, so every
-  // finished submission ended up with deliveryState empty. The app could then never show a failure, and the pull
-  // queries by deliveryState = PENDING missed delivered rows entirely.
   logger.info(
     `[dispatch] finish sub=${sub.id} clickup=${finalClickup} telegram=${finalTelegram} deliveryState=${
       allSent ? 'SENT' : 'FAILED'
@@ -663,53 +714,6 @@ async function recordUnexpectedFailure(
     ['lockedUntil']
   );
   return false;
-}
-
-/**
- * Move FAILED submissions back to PENDING so the dispatcher tries again.
- *
- *   requeueFailedSubmissions(deps)                          → auto-retry everything due (hourly cooldown, 24h max)
- *   requeueFailedSubmissions(deps, { jobCardId: 'JC-...' }) → auto-retry one job card's failures
- *   requeueFailedSubmissions(deps, { submissionId: '...', force: true })
- *                                                            → retry one submission NOW (after fixing ClickUp, quota, group)
- *
- * Only the failed channels are retried: clickupTextSent / telegramTextSent / *_PhotosSent are kept, so text is
- * never re-sent and photos already delivered are not uploaded again. deliveryAttempts resets to 0 so the dispatcher
- * gets a fresh burst of retries.
- */
-export async function requeueFailedSubmissions(
-  deps: Pick<DispatchDeps, 'repo' | 'now'>,
-  opts: { jobCardId?: string; submissionId?: string; force?: boolean } = {}
-): Promise<number> {
-  const { repo, now } = deps;
-  const failures = await repo.listSubmissionsByDeliveryState('FAILED', 100);
-  const nowIso = now().toISOString();
-  const nowMs = now().getTime();
-  let count = 0;
-  for (const sub of failures) {
-    if (opts.jobCardId && sub.jobCardId !== opts.jobCardId) continue;
-    if (opts.submissionId && sub.id !== opts.submissionId) continue;
-    if (!opts.force) {
-      const delivered = Date.parse(String(sub.deliveredAt ?? sub.updatedAt ?? ''));
-      if (!Number.isFinite(delivered) || nowMs - delivered < AUTO_RETRY_COOLDOWN_MS) continue;
-      const submitted = Date.parse(String(sub.submittedAt ?? ''));
-      if (!Number.isFinite(submitted) || nowMs - submitted > AUTO_RETRY_MAX_AGE_MS) continue;
-    }
-    await repo.updateSubmission(
-      sub.id,
-      {
-        deliveryState: 'PENDING',
-        clickupStatus: sub.clickupStatus === 'SENT' ? 'SENT' : 'PENDING',
-        telegramStatus: sub.telegramStatus === 'SENT' ? 'SENT' : 'PENDING',
-        deliveryAttempts: 0,
-        nextAttemptAt: nowIso,
-      },
-      ['deliveryError', 'deliveredAt', 'lockedUntil']
-    );
-    logger.info(`[dispatch] requeued sub=${sub.id} jc=${sub.jobCardId} force=${!!opts.force}`);
-    count += 1;
-  }
-  return count;
 }
 
 async function buildTexts(
@@ -772,7 +776,8 @@ export async function defaultDispatchDeps(): Promise<DispatchDeps> {
     },
     sendTelegramPhotos: async (chatId, photos) => {
       const { getTelegramService } = await import('./telegram.service');
-      return getTelegramService().sendPhotos(chatId, photos);
+      // Now THROWS on failure with the Telegram reason in the message.
+      return getTelegramService().sendPhotos(chatId, photos, { maxRetries: 3 });
     },
     sendTelegramPdf: async (chatId, pdf, filename, caption) => {
       const { getTelegramService } = await import('./telegram.service');

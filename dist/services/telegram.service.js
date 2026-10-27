@@ -25,7 +25,6 @@ export class TelegramService {
         const retryDelay = options?.retryDelay ?? 2000;
         const messageHash = crypto.createHash("md5").update(message).digest("hex");
         const now = Date.now();
-        // Prevent duplicate messages within 5 seconds
         if (this.lastSentMessages.has(messageHash)) {
             const lastSentTime = this.lastSentMessages.get(messageHash) || 0;
             if (now - lastSentTime < 5000) {
@@ -53,7 +52,6 @@ export class TelegramService {
                     logger.error(`Failed after ${maxRetries} attempts. Error:`, axiosError.response?.data || axiosError.message);
                     return false;
                 }
-                // Don't retry if it's a client error (4xx) except 429 (rate limit)
                 if (axiosError.response?.status &&
                     axiosError.response.status >= 400 &&
                     axiosError.response.status < 500 &&
@@ -79,59 +77,112 @@ export class TelegramService {
             .jpeg({ quality: 85 })
             .toBuffer();
     }
-    /** One photo, or an album for 2-10 photos. Returns true only when Telegram accepted them. */
-    /** One photo, or an album for 2–10 photos. */
-    async sendPhotos(chatId, photos) {
+    /**
+     * Send one photo or an album.
+     *
+     * Returns `true` on success. THROWS on any failure — with the real Telegram reason in the message — so the
+     * caller can record WHY it failed (into deliveryError) instead of a generic "photos were not accepted".
+     *
+     * The thrown message is short and safe for DynamoDB: it names the Telegram HTTP status and description, e.g.
+     *   "Telegram sendMediaGroup rejected: 400 Bad Request: PHOTO_INVALID_DIMENSIONS"
+     *   "Telegram sendPhoto timed out after 3 attempts: timeout of 60000ms exceeded"
+     *   "Telegram photo prepare failed: Input buffer contains unsupported image format"
+     */
+    async sendPhotos(chatId, photos, options) {
         return (this.messageQueue = this.messageQueue.then(async () => {
             if (photos.length === 0)
                 return true;
+            const maxRetries = options?.maxRetries ?? 3;
+            const retryDelay = options?.retryDelay ?? 2000;
+            // Sharp resize is expensive; do it once. A sharp failure is not transient.
+            let prepared;
             try {
-                // Normalize every image before sending it to Telegram.
-                const prepared = await Promise.all(photos.map(async (p) => ({
+                prepared = await Promise.all(photos.map(async (p) => ({
                     data: await this.preparePhoto(p.data),
                     filename: p.filename.replace(/\.[^.]+$/, "") + ".jpg",
                     contentType: "image/jpeg",
                     caption: p.caption,
                 })));
-                const form = new FormData();
-                form.append("chat_id", chatId);
-                let method = "sendPhoto";
-                if (prepared.length === 1) {
-                    const p = prepared[0];
-                    form.append("photo", p.data, {
-                        filename: p.filename,
-                        contentType: p.contentType,
-                    });
-                    if (p.caption)
-                        form.append("caption", p.caption);
-                }
-                else {
-                    method = "sendMediaGroup";
-                    const group = prepared.slice(0, 10);
-                    form.append("media", JSON.stringify(group.map((p, i) => ({
-                        type: "photo",
-                        media: `attach://photo${i}`,
-                        ...(p.caption ? { caption: p.caption } : {}),
-                    }))));
-                    group.forEach((p, i) => {
-                        form.append(`photo${i}`, p.data, {
+            }
+            catch (e) {
+                const message = `Telegram photo prepare failed: ${e.message}`;
+                logger.error(`[telegram] ${message}`);
+                throw new Error(message);
+            }
+            const method = prepared.length === 1 ? "sendPhoto" : "sendMediaGroup";
+            const totalBytes = prepared.reduce((n, p) => n + p.data.length, 0);
+            logger.info(`[telegram] ${method} chatId=${chatId} photos=${prepared.length} totalBytes=${totalBytes} ` +
+                `sizes=[${prepared.map((p) => p.data.length).join(",")}] captions=[${prepared
+                    .map((p) => (p.caption ? p.caption.slice(0, 40) : "-"))
+                    .join(" | ")}]`);
+            let lastError = "unknown error";
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const form = new FormData();
+                    form.append("chat_id", chatId);
+                    if (prepared.length === 1) {
+                        const p = prepared[0];
+                        form.append("photo", p.data, {
                             filename: p.filename,
                             contentType: p.contentType,
                         });
+                        if (p.caption)
+                            form.append("caption", p.caption);
+                    }
+                    else {
+                        const group = prepared.slice(0, 10);
+                        form.append("media", JSON.stringify(group.map((p, i) => ({
+                            type: "photo",
+                            media: `attach://photo${i}`,
+                            ...(p.caption ? { caption: p.caption } : {}),
+                        }))));
+                        group.forEach((p, i) => {
+                            form.append(`photo${i}`, p.data, {
+                                filename: p.filename,
+                                contentType: p.contentType,
+                            });
+                        });
+                    }
+                    const response = await axios.post(`${this.apiUrl}${this.botToken}/${method}`, form, {
+                        headers: form.getHeaders(),
+                        timeout: 60000,
+                        maxBodyLength: Infinity,
                     });
+                    if (response.data.ok === true) {
+                        logger.info(`[telegram] ${method} OK after attempt ${attempt}`);
+                        return true;
+                    }
+                    // Telegram said ok:false — read the description and either retry or throw
+                    const description = String(response.data.description ?? "unknown error from Telegram");
+                    const errorCode = Number(response.data.error_code ?? 0);
+                    lastError = `${errorCode} ${description}`;
+                    logger.error(`[telegram] ${method} attempt ${attempt}/${maxRetries} — response not ok: ${lastError}`);
+                    // 400/403/413 are permanent
+                    if (errorCode >= 400 && errorCode < 500 && errorCode !== 429) {
+                        throw new Error(`Telegram ${method} rejected: ${lastError}`);
+                    }
                 }
-                const response = await axios.post(`${this.apiUrl}${this.botToken}/${method}`, form, {
-                    headers: form.getHeaders(),
-                    timeout: 60000,
-                    maxBodyLength: Infinity,
-                });
-                return response.data.ok === true;
+                catch (error) {
+                    if (error instanceof Error && error.message.startsWith("Telegram ")) {
+                        // Our own throw from the ok:false branch — do not retry
+                        throw error;
+                    }
+                    const axiosError = error;
+                    const status = axiosError.response?.status;
+                    const data = axiosError.response?.data;
+                    const description = data?.description ?? axiosError.message;
+                    lastError = `${status ?? "n/a"} ${description}`;
+                    logger.error(`[telegram] ${method} attempt ${attempt}/${maxRetries} failed: ${lastError}`);
+                    // 4xx (except 429) is permanent: bad request, payload too large, bot not in chat
+                    if (status && status >= 400 && status < 500 && status !== 429) {
+                        throw new Error(`Telegram ${method} rejected: ${lastError}`);
+                    }
+                    if (attempt === maxRetries)
+                        break;
+                    await new Promise((r) => setTimeout(r, retryDelay * Math.pow(2, attempt - 1)));
+                }
             }
-            catch (error) {
-                const axiosError = error;
-                logger.error("Telegram photo send failed:", axiosError.response?.data || axiosError.message);
-                return false;
-            }
+            throw new Error(`Telegram ${method} failed after ${maxRetries} attempts: ${lastError}`);
         }));
     }
     async sendPdf(pdfBuffer, chatId, options) {
@@ -146,7 +197,6 @@ export class TelegramService {
         const caption = options?.caption || "";
         const fileHash = crypto.createHash("md5").update(pdfBuffer).digest("hex");
         const now = Date.now();
-        // Prevent duplicate files within 5 seconds
         if (this.lastSentMessages.has(fileHash)) {
             const lastSentTime = this.lastSentMessages.get(fileHash) || 0;
             if (now - lastSentTime < 5000) {
@@ -181,7 +231,6 @@ export class TelegramService {
                     logger.error(`Failed after ${maxRetries} attempts. Error:`, axiosError.response?.data || axiosError.message);
                     return false;
                 }
-                // Don't retry if it's a client error (4xx) except 429 (rate limit)
                 if (axiosError.response?.status &&
                     axiosError.response.status >= 400 &&
                     axiosError.response.status < 500 &&
@@ -195,7 +244,6 @@ export class TelegramService {
         return false;
     }
 }
-// Singleton implementation
 let telegramServiceInstance;
 export function getTelegramService() {
     if (!telegramServiceInstance) {

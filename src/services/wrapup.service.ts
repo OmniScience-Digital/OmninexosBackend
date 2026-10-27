@@ -6,14 +6,10 @@
 // Each step records what it has sent on the job card (timePostedAt, certTelegramAt, certClickupAt), so a retry
 // or a second sweep never repeats a message.
 //
-// IMPORTANT (bug fixed 2026-10-27): "Job card complete" was going out the moment the LAST module was marked
-// SUBMITTED, even while its images were still being delivered. That looks like "the job is done" followed by
-// images trickling in. The gate below waits until every module's latest submission has a terminal delivery state
-// (SENT delivered, or FAILED gave up) before the message is allowed out.
-//
 // Only job cards that finished or closed recently are touched, so switching this on never floods old job cards.
 // Set JOBCARD_WRAPUP_FROM (an ISO date) to choose the start; without it the last 24 hours are used.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { certificatesEnabled } from '../helper/jobcard/jobcard.config';
 import { formatTotalTimeForTelegram } from '../helper/jobcard/resultFormat';
 import { AUTO_RETRY_MAX_AGE_MS } from './jobcard.dispatch.service';
 import {
@@ -43,27 +39,13 @@ function since(deps: Pick<DispatchDeps, 'now'>): number {
   return Number.isFinite(from) ? from : deps.now().getTime() - DAY_MS;
 }
 
-/**
- * A submission is "terminal" when no further dispatch attempt will change it:
- *   deliveryState = SENT   → every configured channel accepted it
- *   deliveryState = FAILED → at least one channel gave up permanently
- * PENDING (or missing) means a dispatch attempt is still in flight (or waiting for its next retry), so the
- * individual result and its images have not yet reached the office. "Job card complete" must wait for all of
- * them to be terminal, otherwise the message goes out first and the images land afterwards.
- *
- * Legacy rows written by the old code had deliveryState removed at the end. For those, fall back to the channel
- * statuses: both SENT, or at least one FAILED, means terminal.
- */
 function isTerminalSubmission(s: Row, nowMs: number): boolean {
   const ds = String(s.deliveryState ?? '');
   if (ds === 'SENT') return true;
   if (ds === 'FAILED') {
-    // Auto-retry (requeueFailedSubmissions) will pick this up within AUTO_RETRY_MAX_AGE_MS. Hold "Job card
-    // complete" until either the retry succeeds (SENT) or the grace period expires with it still FAILED.
     const submitted = Date.parse(String(s.submittedAt ?? ''));
     return !Number.isFinite(submitted) || nowMs - submitted > AUTO_RETRY_MAX_AGE_MS;
   }
-  // Legacy rows (deliveryState was deleted by the old finish()): fall back to channel statuses.
   const c = String(s.clickupStatus ?? 'PENDING');
   const t = String(s.telegramStatus ?? 'PENDING');
   if (c === 'SENT' && t === 'SENT') return true;
@@ -74,11 +56,6 @@ function isTerminalSubmission(s: Row, nowMs: number): boolean {
   return false;
 }
 
-/**
- * True only when every module of the job card has at least one submission and the LATEST submission for each is
- * terminal. If any module has no submission (bad data) or its latest is still PENDING, this returns false — the
- * "Job card complete" message will be held back to the next sweep.
- */
 async function everyResultTerminal(
   repo: DispatchDeps['repo'],
   items: Row[],
@@ -104,7 +81,6 @@ async function everyResultTerminal(
   return true;
 }
 
-/** A one-page placeholder, clearly marked as not a real certificate. */
 export async function buildPlaceholderCertificate(info: {
   jcNumber: string;
   customerName?: string;
@@ -150,14 +126,9 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
     summary.examined += 1;
     try {
       const items: any[] = await repo.listModules(jc.id);
-
       const group = jc.telegramGroupId ? await repo.getTelegramGroup(jc.telegramGroupId) : null;
       const chatId = group && group.active !== false ? String(group.chatId) : null;
 
-      // 1. total time: only when (a) every module is SUBMITTED (technician finished the work) AND (b) every
-      // module's latest submission is terminal (dispatch delivered it — images included — or gave up). Without
-      // (b) this message went out before the individual result images arrived, which looked like the job finished
-      // before it did.
       if (!jc.timePostedAt && chatId && allSubmitted(items)) {
         if (!(await everyResultTerminal(repo, items, deps.now().getTime()))) {
           logger.info(
@@ -189,8 +160,7 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
         }
       }
 
-      // 2. placeholder certificate when the job card is closed
-      if (jc.status === 'CLOSED') {
+      if (jc.status === 'CLOSED' && certificatesEnabled()) {
         const closedAt = Date.parse(jc.closedAt ?? jc.updatedAt ?? '');
         const wantTelegram = !jc.certTelegramAt && !!chatId && !!deps.sendTelegramPdf;
         const wantClickUp = !jc.certClickupAt && !!jc.clickupTaskId && !!deps.attachClickUpFile;
