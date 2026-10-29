@@ -1,16 +1,4 @@
 // src/services/wrapup.service.ts
-//
-// Sweep that finds job cards awaiting wrap-up via the sparse
-// jobCardsByWrapUpPendingAndClosedAt GSI.
-//
-// Sequence for each closed card:
-//   1. Send the certificate on Telegram        → set certificateSentAt
-//   2. Send the total-time message             → set totalTimePostedAt
-//   3. Remove wrapUpPending                    → drops from GSI
-//
-// The marker wrapUpPending = "PENDING" MUST be set on close (by the close
-// handler) for a card to appear in the GSI. Without it, the sweep never
-// sees the card. See notes at the bottom.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { certificatesEnabled } from '../helper/jobcard/jobcard.config';
 import { formatTotalTimeForTelegram } from '../helper/jobcard/resultFormat';
@@ -25,7 +13,6 @@ import logger from '../utils/logger';
 import type { DispatchDeps } from './jobcard.dispatch.service';
 
 const DAY_MS = 86_400_000;
-/** Give up on a stuck card 7 days after close. */
 const WRAPUP_MAX_AGE_MS = 7 * DAY_MS;
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 type Row = Record<string, any>;
@@ -92,7 +79,6 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
   for (const jc of await repo.listJobCardsAwaitingWrapUp()) {
     summary.examined += 1;
     try {
-      // Only CLOSED cards should hold the marker. Clear any stray.
       if (jc.status !== 'CLOSED') {
         logger.warn(`[wrapup] jc=${jc.id} has wrapUpPending but is not CLOSED — removing marker`);
         await repo.setJobCardFields(jc.id, {}, ['wrapUpPending']);
@@ -107,8 +93,6 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
         summary.done += 1;
         continue;
       }
-
-      // Soft cap: give up on cards that have been stuck > 7 days.
       if (nowMs - closedAt > WRAPUP_MAX_AGE_MS) {
         logger.error(`[wrapup] jc=${jc.id} stuck for > 7 days — removing marker and giving up`);
         await repo.setJobCardFields(jc.id, {}, ['wrapUpPending']);
@@ -121,57 +105,89 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
       const chatId = group && group.active !== false ? String(group.chatId) : null;
 
       // ---------------- 1. Certificate ----------------
-      const certsOn = certificatesEnabled() && !!deps.sendTelegramPdf;
-      let certSent = !!jc.certificateSentAt;
+      const certsOn = certificatesEnabled();
+      const wantTelegram = certsOn && !jc.certificateSentAt && !!chatId && !!deps.sendTelegramPdf;
+      const wantClickUp =
+        certsOn && !jc.certificateClickupAt && !!jc.clickupTaskId && !!deps.attachClickUpFile;
 
-      if (certsOn && !certSent) {
-        if (!chatId) {
-          logger.info(`[wrapup] jc=${jc.id} certificate waiting: no active Telegram group`);
-        } else {
-          const scaleIds = [...new Set(items.map((i) => i.scaleId).filter(Boolean))];
-          const scales: string[] = [];
-          for (const id of scaleIds) {
-            const s = await repo.getScale(id as string);
-            if (s?.scaleName) scales.push(String(s.scaleName));
-          }
-          const jcNumber = jc.jcNumber ?? jc.id;
-          const pdf = await buildPlaceholderCertificate({
-            jcNumber,
-            customerName: jc.customerName,
-            closedOn: new Date(closedAt).toISOString().slice(0, 10),
-            scales,
-          });
-          const filename = `${jcNumber} - certificate (placeholder).pdf`;
-          const ok = await deps.sendTelegramPdf!(
-            chatId,
-            pdf,
-            filename,
-            `Certificate placeholder - ${jcNumber}`
-          );
-          if (ok) {
+      if (wantTelegram || wantClickUp) {
+        const scaleIds = [...new Set(items.map((i) => i.scaleId).filter(Boolean))];
+        const scales: string[] = [];
+        for (const id of scaleIds) {
+          const s = await repo.getScale(id as string);
+          if (s?.scaleName) scales.push(String(s.scaleName));
+        }
+        const jcNumber = jc.jcNumber ?? jc.id;
+        const pdf = await buildPlaceholderCertificate({
+          jcNumber,
+          customerName: jc.customerName,
+          closedOn: new Date(closedAt).toISOString().slice(0, 10),
+          scales,
+        });
+        const filename = `${jcNumber} - certificate (placeholder).pdf`;
+
+        if (wantTelegram) {
+          if (
+            await deps.sendTelegramPdf!(
+              chatId!,
+              pdf,
+              filename,
+              `Certificate placeholder - ${jcNumber}`
+            )
+          ) {
             await repo.setJobCardFields(jc.id, {
               certificateSentAt: deps.now().toISOString(),
             });
-            certSent = true;
             summary.certificatesSent += 1;
             logger.info(`[wrapup] jc=${jc.id} certificate sent on Telegram`);
           } else {
             logger.warn(
               `[wrapup] jc=${jc.id} certificate Telegram send returned false — will retry`
             );
-            continue;
+          }
+        }
+
+        if (wantClickUp) {
+          try {
+            await deps.attachClickUpFile!(jc.clickupTaskId, {
+              data: pdf,
+              contentType: 'application/pdf',
+              filename,
+            });
+            await repo.setJobCardFields(jc.id, {
+              certificateClickupAt: deps.now().toISOString(),
+            });
+            if (!wantTelegram) summary.certificatesSent += 1;
+            logger.info(`[wrapup] jc=${jc.id} certificate uploaded to ClickUp`);
+          } catch (e) {
+            logger.error(
+              `[wrapup] jc=${jc.id} certificate ClickUp upload failed (will retry): ${msg(e)}`
+            );
           }
         }
       }
 
-      if (certsOn && !certSent) {
-        // Cert not yet sent (no group or send failed) — retry next sweep.
+      // Wait for both certificate channels before the time message.
+      const certDone =
+        !certsOn ||
+        ((!deps.sendTelegramPdf || !!jc.certificateSentAt || !chatId) &&
+          (!deps.attachClickUpFile || !!jc.clickupTaskId === false || !!jc.certificateClickupAt));
+
+      // Simpler check, only when certificates are enabled:
+      const telegramCertOk = !certsOn || !deps.sendTelegramPdf || !chatId || !!jc.certificateSentAt;
+      const clickupCertOk =
+        !certsOn || !deps.attachClickUpFile || !jc.clickupTaskId || !!jc.certificateClickupAt;
+      const readyForTime = telegramCertOk && clickupCertOk;
+
+      if (certsOn && !readyForTime) {
+        logger.info(
+          `[wrapup] jc=${jc.id} time message waiting: certificate not yet done (tg=${telegramCertOk} cu=${clickupCertOk})`
+        );
         continue;
       }
 
       // ---------------- 2. Time message ----------------
       let timeSent = !!jc.totalTimePostedAt;
-
       if (!timeSent) {
         if (!chatId) {
           logger.info(`[wrapup] jc=${jc.id} time message waiting: no active Telegram group`);
@@ -221,8 +237,7 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
         }
       }
 
-      // ---------------- 3. Done — remove marker ----------------
-      if (timeSent && (!certsOn || certSent)) {
+      if (timeSent && readyForTime) {
         await repo.setJobCardFields(jc.id, {}, ['wrapUpPending']);
         summary.done += 1;
         logger.info(`[wrapup] jc=${jc.id} wrap-up complete, marker removed`);
