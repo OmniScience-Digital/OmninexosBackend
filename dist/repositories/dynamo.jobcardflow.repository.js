@@ -1,8 +1,6 @@
 // src/repositories/dynamo.jobcardflow.repository.ts
-// Raw DynamoDB access for the job card flow: handling results, stopping the timer, certificates, Telegram groups.
-// Same style as the other repositories (dynamoClient + marshall). Table/index names: see jobcard.config.ts.
 import "dotenv/config";
-import { GetItemCommand, PutItemCommand, QueryCommand, ScanCommand, UpdateItemCommand, } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand, } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { dynamoClient } from "../services/dynamo.service.js";
 import { INDEX, table } from "../helper/jobcard/jobcard.config.js";
@@ -27,11 +25,10 @@ async function queryAll(tableName, indexName, keyName, keyValue, opts = {}) {
             ExclusiveStartKey: startKey,
         }));
         rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
-        startKey = opts.limit ? undefined : res.LastEvaluatedKey; // a limited query is one page
+        startKey = opts.limit ? undefined : res.LastEvaluatedKey;
     } while (startKey);
     return rows;
 }
-/** SET the given values and REMOVE the given attributes on one row. Undefined values are skipped. */
 async function updateById(tableName, id, set, remove = [], condition) {
     const names = { ...(condition?.names ?? {}) };
     const values = { ...(condition?.values ?? {}) };
@@ -53,6 +50,8 @@ async function updateById(tableName, id, set, remove = [], condition) {
     ]
         .filter(Boolean)
         .join(" ");
+    if (!expr)
+        return;
     await dynamoClient.send(new UpdateItemCommand({
         TableName: tableName,
         Key: marshall({ id }),
@@ -77,38 +76,22 @@ export const closeTimeEntry = (id, endedAt, minutes, endReason) => updateById(ta
     endReason,
     updatedAt: new Date().toISOString(),
 });
-/** Job cards that still owe the wrap-up messages (total time, placeholder certificate). A small table, so a scan is fine. */
-export async function listJobCardsAwaitingWrapUp() {
-    const rows = [];
-    let startKey;
-    do {
-        const res = await dynamoClient.send(new ScanCommand({
-            TableName: table("jobCard"),
-            FilterExpression: "attribute_not_exists(totalTimePostedAt) OR (#st = :closed AND (attribute_not_exists(certTelegramAt) OR attribute_not_exists(certClickupAt)))",
-            ExpressionAttributeNames: { "#st": "status" },
-            ExpressionAttributeValues: marshall({ ":closed": "CLOSED" }),
-            ExclusiveStartKey: startKey,
-        }));
-        rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
-        startKey = res.LastEvaluatedKey;
-    } while (startKey);
-    return rows;
-}
-export const setJobCardFields = (jobCardId, set) => updateById(table("jobCard"), jobCardId, set, [], { expression: "attribute_exists(id)" });
-export const setJobCardTotal = (jobCardId, totalMinutes) => updateById(table("jobCard"), jobCardId, { totalMinutes, updatedAt: new Date().toISOString() }, [], {
-    expression: "attribute_exists(id)",
-});
+/**
+ * Job cards that still owe the wrap-up messages. Found through the sparse
+ * `jobCardsByWrapUpPendingAndClosedAt` GSI: only cards with wrapUpPending
+ * set appear here, so this is a small bounded query, not a table scan.
+ */
+export const listJobCardsAwaitingWrapUp = () => queryAll(table("jobCard"), INDEX.jobCardsByWrapUpPending, "wrapUpPending", "PENDING");
+export const setJobCardFields = (jobCardId, set, remove = []) => updateById(table("jobCard"), jobCardId, set, remove, { expression: "attribute_exists(id)" });
+export const setJobCardTotal = (jobCardId, totalMinutes) => updateById(table("jobCard"), jobCardId, { totalMinutes, updatedAt: new Date().toISOString() }, [], { expression: "attribute_exists(id)" });
 // ---------- submissions (results) ----------
-/** Results still waiting to be handled, oldest first. Found through the sparse deliveryState index. */
 export const listSubmissionsByDeliveryState = (state, limit = 100) => queryAll(table("submission"), INDEX.submissionsByDeliveryState, "deliveryState", state, {
     limit,
 });
 export const listPendingSubmissions = (limit = 100) => listSubmissionsByDeliveryState("PENDING", limit);
-/** Latest result first. */
 export const listSubmissionsByModule = (moduleId) => queryAll(table("submission"), INDEX.submissionsByModule, "moduleId", moduleId, {
     newestFirst: true,
 });
-/** Take a short lease on a result so two server instances never handle the same one. */
 export async function claimSubmission(id, nowMs, leaseMs) {
     try {
         await updateById(table("submission"), id, { lockedUntil: nowMs + leaseMs }, [], {
@@ -126,7 +109,6 @@ export async function claimSubmission(id, nowMs, leaseMs) {
 export const updateSubmission = (id, set, remove = []) => updateById(table("submission"), id, { ...set, updatedAt: new Date().toISOString() }, remove);
 // ---------- Telegram groups ----------
 export const getTelegramGroup = (id) => getById(table("telegramGroup"), id);
-/** Create or update a group from a bot event. Same row id as the web app's manual add, so there is one row per chat. */
 export async function upsertTelegramGroup(event, nowIso = new Date().toISOString()) {
     const id = telegramGroupRowId(event.chatId);
     const names = {
@@ -163,7 +145,6 @@ export async function upsertTelegramGroup(event, nowIso = new Date().toISOString
 }
 // ---------- certificates ----------
 export const listCertificatesByScale = (scaleId) => queryAll(table("certificate"), INDEX.certificatesByScale, "scaleId", scaleId);
-/** Reserve a certificate row. Returns false if that exact row (scale + version) already exists. */
 export async function reserveCertificate(row) {
     try {
         await dynamoClient.send(new PutItemCommand({
@@ -180,7 +161,6 @@ export async function reserveCertificate(row) {
     }
 }
 export const updateCertificate = (id, set) => updateById(table("certificate"), id, { ...set, updatedAt: new Date().toISOString() });
-/** Atomic counter: every call returns a number nobody else has been given. */
 export async function nextCertificateNumber() {
     const now = new Date().toISOString();
     const res = await dynamoClient.send(new UpdateItemCommand({

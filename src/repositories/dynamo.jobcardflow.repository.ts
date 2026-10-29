@@ -1,6 +1,4 @@
 // src/repositories/dynamo.jobcardflow.repository.ts
-// Raw DynamoDB access for the job card flow: handling results, stopping the timer, certificates, Telegram groups.
-// Same style as the other repositories (dynamoClient + marshall). Table/index names: see jobcard.config.ts.
 import 'dotenv/config';
 import {
   GetItemCommand,
@@ -47,12 +45,11 @@ async function queryAll(
       })
     );
     rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
-    startKey = opts.limit ? undefined : res.LastEvaluatedKey; // a limited query is one page
+    startKey = opts.limit ? undefined : res.LastEvaluatedKey;
   } while (startKey);
   return rows;
 }
 
-/** SET the given values and REMOVE the given attributes on one row. Undefined values are skipped. */
 async function updateById(
   tableName: string,
   id: string,
@@ -79,6 +76,7 @@ async function updateById(
   ]
     .filter(Boolean)
     .join(' ');
+  if (!expr) return;
   await dynamoClient.send(
     new UpdateItemCommand({
       TableName: tableName,
@@ -112,29 +110,16 @@ export const closeTimeEntry = (id: string, endedAt: string, minutes: number, end
     updatedAt: new Date().toISOString(),
   });
 
-/** Job cards that still owe the wrap-up messages (total time, placeholder certificate). A small table, so a scan is fine. */
-export async function listJobCardsAwaitingWrapUp(): Promise<Row[]> {
-  const rows: Row[] = [];
-  let startKey: Record<string, any> | undefined;
-  do {
-    const res = await dynamoClient.send(
-      new ScanCommand({
-        TableName: table('jobCard'),
-        FilterExpression:
-          'attribute_not_exists(totalTimePostedAt) OR (#st = :closed AND (attribute_not_exists(certTelegramAt) OR attribute_not_exists(certClickupAt)))',
-        ExpressionAttributeNames: { '#st': 'status' },
-        ExpressionAttributeValues: marshall({ ':closed': 'CLOSED' }),
-        ExclusiveStartKey: startKey,
-      })
-    );
-    rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
-    startKey = res.LastEvaluatedKey;
-  } while (startKey);
-  return rows;
-}
+/**
+ * Job cards that still owe the wrap-up messages. Found through the sparse
+ * `jobCardsByWrapUpPendingAndClosedAt` GSI: only cards with wrapUpPending
+ * set appear here, so this is a small bounded query, not a table scan.
+ */
+export const listJobCardsAwaitingWrapUp = (): Promise<Row[]> =>
+  queryAll(table('jobCard'), INDEX.jobCardsByWrapUpPending, 'wrapUpPending', 'PENDING');
 
-export const setJobCardFields = (jobCardId: string, set: Row) =>
-  updateById(table('jobCard'), jobCardId, set, [], { expression: 'attribute_exists(id)' });
+export const setJobCardFields = (jobCardId: string, set: Row, remove: string[] = []) =>
+  updateById(table('jobCard'), jobCardId, set, remove, { expression: 'attribute_exists(id)' });
 
 export const setJobCardTotal = (jobCardId: string, totalMinutes: number) =>
   updateById(
@@ -142,13 +127,10 @@ export const setJobCardTotal = (jobCardId: string, totalMinutes: number) =>
     jobCardId,
     { totalMinutes, updatedAt: new Date().toISOString() },
     [],
-    {
-      expression: 'attribute_exists(id)',
-    }
+    { expression: 'attribute_exists(id)' }
   );
 
 // ---------- submissions (results) ----------
-/** Results still waiting to be handled, oldest first. Found through the sparse deliveryState index. */
 export const listSubmissionsByDeliveryState = (state: 'PENDING' | 'FAILED' | 'SENT', limit = 100) =>
   queryAll(table('submission'), INDEX.submissionsByDeliveryState, 'deliveryState', state, {
     limit,
@@ -157,13 +139,11 @@ export const listSubmissionsByDeliveryState = (state: 'PENDING' | 'FAILED' | 'SE
 export const listPendingSubmissions = (limit = 100) =>
   listSubmissionsByDeliveryState('PENDING', limit);
 
-/** Latest result first. */
 export const listSubmissionsByModule = (moduleId: string) =>
   queryAll(table('submission'), INDEX.submissionsByModule, 'moduleId', moduleId, {
     newestFirst: true,
   });
 
-/** Take a short lease on a result so two server instances never handle the same one. */
 export async function claimSubmission(
   id: string,
   nowMs: number,
@@ -188,7 +168,6 @@ export const updateSubmission = (id: string, set: Row, remove: string[] = []) =>
 // ---------- Telegram groups ----------
 export const getTelegramGroup = (id: string) => getById(table('telegramGroup'), id);
 
-/** Create or update a group from a bot event. Same row id as the web app's manual add, so there is one row per chat. */
 export async function upsertTelegramGroup(event: GroupEvent, nowIso = new Date().toISOString()) {
   const id = telegramGroupRowId(event.chatId);
   const names: Record<string, string> = {
@@ -230,7 +209,6 @@ export async function upsertTelegramGroup(event: GroupEvent, nowIso = new Date()
 export const listCertificatesByScale = (scaleId: string) =>
   queryAll(table('certificate'), INDEX.certificatesByScale, 'scaleId', scaleId);
 
-/** Reserve a certificate row. Returns false if that exact row (scale + version) already exists. */
 export async function reserveCertificate(row: Row): Promise<boolean> {
   try {
     await dynamoClient.send(
@@ -250,7 +228,6 @@ export async function reserveCertificate(row: Row): Promise<boolean> {
 export const updateCertificate = (id: string, set: Row) =>
   updateById(table('certificate'), id, { ...set, updatedAt: new Date().toISOString() });
 
-/** Atomic counter: every call returns a number nobody else has been given. */
 export async function nextCertificateNumber(): Promise<number> {
   const now = new Date().toISOString();
   const res = await dynamoClient.send(

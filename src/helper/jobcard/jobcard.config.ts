@@ -1,7 +1,4 @@
-// src/helper/jobcard/jobcard.config.ts  (NEW FILE)
-// Table names and index names for the job card tables created by the Amplify frontend project.
-
-/** Table names come from .env (DynamoDB console -> Tables: names look like JobCard-xxxxxxxx-NONE). */
+// src/helper/jobcard/jobcard.config.ts
 export const TABLE_ENV = {
   jobCard: 'JOBCARD_TABLE',
   scale: 'JOBCARD_SCALE_TABLE',
@@ -20,20 +17,15 @@ export function table(key: TableKey): string {
   return name;
 }
 
-/**
- * Index names follow Amplify's default pattern (the same one your existing repositories use, e.g.
- * 'quotesByQuoteNumber'): <modelPlural>By<PartitionKey>[And<SortKey>]. If a query ever fails with
- * "index not found", compare these with DynamoDB console -> table -> Indexes.
- */
 export const INDEX = {
   submissionsByDeliveryState: 'jobCardSubmissionsByDeliveryStateAndSubmittedAt',
   submissionsByModule: 'jobCardSubmissionsByModuleIdAndSubmittedAt',
   modulesByJobCard: 'jobCardModulesByJobCardId',
   timeEntriesByJobCard: 'jobCardTimeEntriesByJobCardIdAndStartedAt',
   certificatesByScale: 'calibrationCertificatesByScaleIdAndIssuedAt',
+  jobCardsByWrapUpPending: 'jobCardsByWrapUpPendingAndClosedAt',
 } as const;
 
-/** Handling of results (stop timer, certificates, ClickUp, Telegram) runs only when the main tables are configured. */
 export const jobCardFlowEnabled = (): boolean =>
   Boolean(
     process.env.JOBCARD_TABLE &&
@@ -41,7 +33,6 @@ export const jobCardFlowEnabled = (): boolean =>
     process.env.JOBCARD_MODULE_TABLE
   );
 
-/** Certificates stay OFF until the layout is approved (set CERTIFICATES_ENABLED=true to switch on). */
 export const certificatesEnabled = (): boolean => process.env.CERTIFICATES_ENABLED === 'true';
 
 export const CALIBRATION_TYPES = ['ZERO_CALIBRATION', 'SPAN_CALIBRATION'] as const;
