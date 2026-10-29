@@ -29,6 +29,26 @@ async function queryAll(tableName, indexName, keyName, keyValue, opts = {}) {
     } while (startKey);
     return rows;
 }
+/** Query with a `>=` range on the sort key. Same GSI, one extra condition. */
+async function queryAllWithRange(tableName, indexName, keyName, keyValue, rangeName, rangeFrom, opts = {}) {
+    const rows = [];
+    let startKey;
+    do {
+        const res = await dynamoClient.send(new QueryCommand({
+            TableName: tableName,
+            IndexName: indexName,
+            KeyConditionExpression: "#k = :v AND #r >= :from",
+            ExpressionAttributeNames: { "#k": keyName, "#r": rangeName },
+            ExpressionAttributeValues: marshall({ ":v": keyValue, ":from": rangeFrom }),
+            ScanIndexForward: !opts.newestFirst,
+            Limit: opts.limit,
+            ExclusiveStartKey: startKey,
+        }));
+        rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
+        startKey = opts.limit ? undefined : res.LastEvaluatedKey;
+    } while (startKey);
+    return rows;
+}
 async function updateById(tableName, id, set, remove = [], condition) {
     const names = { ...(condition?.names ?? {}) };
     const values = { ...(condition?.values ?? {}) };
@@ -78,7 +98,7 @@ export const closeTimeEntry = (id, endedAt, minutes, endReason) => updateById(ta
 });
 /**
  * Job cards that still owe the wrap-up messages. Found through the sparse
- * `jobCardsByWrapUpPendingAndClosedAt` GSI: only cards with wrapUpPending
+ * `jobCardsByWrapUpPendingAndClosedAt` GSI — only cards with wrapUpPending
  * set appear here, so this is a small bounded query, not a table scan.
  */
 export const listJobCardsAwaitingWrapUp = () => queryAll(table("jobCard"), INDEX.jobCardsByWrapUpPending, "wrapUpPending", "PENDING");
@@ -88,7 +108,15 @@ export const setJobCardTotal = (jobCardId, totalMinutes) => updateById(table("jo
 export const listSubmissionsByDeliveryState = (state, limit = 100) => queryAll(table("submission"), INDEX.submissionsByDeliveryState, "deliveryState", state, {
     limit,
 });
+/**
+ * FAILED submissions still within the retry window. Uses the sort key
+ * (submittedAt) on the deliveryState GSI so that old FAILED rows which are
+ * past the retry age no longer fill the page — this keeps requeue bounded
+ * and correct as FAILED rows accumulate.
+ */
+export const listFailedSubmissionsSince = (sinceIso, limit = 100) => queryAllWithRange(table("submission"), INDEX.submissionsByDeliveryState, "deliveryState", "FAILED", "submittedAt", sinceIso, { limit });
 export const listPendingSubmissions = (limit = 100) => listSubmissionsByDeliveryState("PENDING", limit);
+export const getSubmission = (id) => getById(table("submission"), id);
 export const listSubmissionsByModule = (moduleId) => queryAll(table("submission"), INDEX.submissionsByModule, "moduleId", moduleId, {
     newestFirst: true,
 });

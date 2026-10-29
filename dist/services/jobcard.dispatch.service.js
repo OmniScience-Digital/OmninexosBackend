@@ -149,23 +149,47 @@ export async function stopTimerIfComplete(deps, jobCardId) {
     await repo.setJobCardTotal(jobCardId, mergedMinutesTotal(await repo.listTimeEntries(jobCardId)));
     logger.info(`[dispatch] stopTimer jc=${jobCardId} stopped (${plan.reason})`);
 }
+/**
+ * Requeue FAILED submissions.
+ *
+ * - Automatic path: query the deliveryState GSI with a `submittedAt >= cutoff`
+ *   range so the query returns only FAILED rows still within the retry window.
+ *   Without this range, old FAILED rows fill the page and newer FAILED rows
+ *   are never seen once 100+ old rows exist.
+ * - `force` widens the cutoff to epoch (manual override).
+ * - `submissionId` short-circuits to a single GetItem (explicit intent, no
+ *   time gate).
+ */
 export async function requeueFailedSubmissions(deps, opts = {}) {
     const { repo, now } = deps;
-    const failures = await repo.listSubmissionsByDeliveryState("FAILED", 100);
-    const nowIso = now().toISOString();
     const nowMs = now().getTime();
+    const nowIso = now().toISOString();
+    if (opts.submissionId) {
+        const sub = await repo.getSubmission(opts.submissionId);
+        if (!sub || sub.deliveryState !== "FAILED")
+            return 0;
+        await repo.updateSubmission(sub.id, {
+            deliveryState: "PENDING",
+            clickupStatus: sub.clickupStatus === "SENT" ? "SENT" : "PENDING",
+            telegramStatus: sub.telegramStatus === "SENT" ? "SENT" : "PENDING",
+            deliveryAttempts: 0,
+            nextAttemptAt: nowIso,
+        }, ["deliveryError", "deliveredAt", "lockedUntil"]);
+        logger.info(`[dispatch] requeued sub=${sub.id} jc=${sub.jobCardId} (targeted)`);
+        return 1;
+    }
+    const cutoffIso = opts.force
+        ? new Date(0).toISOString()
+        : new Date(nowMs - AUTO_RETRY_MAX_AGE_MS).toISOString();
+    const failures = await repo.listFailedSubmissionsSince(cutoffIso, 100);
+    logger.info(`[dispatch] requeue candidates=${failures.length} cutoff=${cutoffIso} force=${!!opts.force}`);
     let count = 0;
     for (const sub of failures) {
         if (opts.jobCardId && sub.jobCardId !== opts.jobCardId)
             continue;
-        if (opts.submissionId && sub.id !== opts.submissionId)
-            continue;
         if (!opts.force) {
             const delivered = Date.parse(String(sub.deliveredAt ?? sub.updatedAt ?? ""));
             if (!Number.isFinite(delivered) || nowMs - delivered < AUTO_RETRY_COOLDOWN_MS)
-                continue;
-            const submitted = Date.parse(String(sub.submittedAt ?? ""));
-            if (!Number.isFinite(submitted) || nowMs - submitted > AUTO_RETRY_MAX_AGE_MS)
                 continue;
         }
         await repo.updateSubmission(sub.id, {
@@ -398,8 +422,6 @@ async function processSubmission(deps, sub, stopTimer) {
                                 }
                                 logger.info(`[dispatch] sub=${sub.id} sending photo album size=${files.length}`);
                                 if (files.length) {
-                                    // sendTelegramPhotos THROWS with the real reason on failure. Nothing to check for `false`
-                                    // here — either it succeeds or it throws, and the throw carries the Telegram response.
                                     await deps.sendTelegramPhotos(chatId, files);
                                     for (const p of chunk)
                                         done.add(p.key);
@@ -546,7 +568,6 @@ export async function defaultDispatchDeps() {
         },
         sendTelegramPhotos: async (chatId, photos) => {
             const { getTelegramService } = await import("./telegram.service.js");
-            // Now THROWS on failure with the Telegram reason in the message.
             return getTelegramService().sendPhotos(chatId, photos, { maxRetries: 3 });
         },
         sendTelegramPdf: async (chatId, pdf, filename, caption) => {

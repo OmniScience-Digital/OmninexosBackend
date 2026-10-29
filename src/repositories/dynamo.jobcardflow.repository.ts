@@ -50,6 +50,37 @@ async function queryAll(
   return rows;
 }
 
+/** Query with a `>=` range on the sort key. Same GSI, one extra condition. */
+async function queryAllWithRange(
+  tableName: string,
+  indexName: string,
+  keyName: string,
+  keyValue: string,
+  rangeName: string,
+  rangeFrom: string,
+  opts: { newestFirst?: boolean; limit?: number } = {}
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  let startKey: Record<string, any> | undefined;
+  do {
+    const res = await dynamoClient.send(
+      new QueryCommand({
+        TableName: tableName,
+        IndexName: indexName,
+        KeyConditionExpression: '#k = :v AND #r >= :from',
+        ExpressionAttributeNames: { '#k': keyName, '#r': rangeName },
+        ExpressionAttributeValues: marshall({ ':v': keyValue, ':from': rangeFrom }),
+        ScanIndexForward: !opts.newestFirst,
+        Limit: opts.limit,
+        ExclusiveStartKey: startKey,
+      })
+    );
+    rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
+    startKey = opts.limit ? undefined : res.LastEvaluatedKey;
+  } while (startKey);
+  return rows;
+}
+
 async function updateById(
   tableName: string,
   id: string,
@@ -112,7 +143,7 @@ export const closeTimeEntry = (id: string, endedAt: string, minutes: number, end
 
 /**
  * Job cards that still owe the wrap-up messages. Found through the sparse
- * `jobCardsByWrapUpPendingAndClosedAt` GSI: only cards with wrapUpPending
+ * `jobCardsByWrapUpPendingAndClosedAt` GSI — only cards with wrapUpPending
  * set appear here, so this is a small bounded query, not a table scan.
  */
 export const listJobCardsAwaitingWrapUp = (): Promise<Row[]> =>
@@ -136,8 +167,27 @@ export const listSubmissionsByDeliveryState = (state: 'PENDING' | 'FAILED' | 'SE
     limit,
   });
 
+/**
+ * FAILED submissions still within the retry window. Uses the sort key
+ * (submittedAt) on the deliveryState GSI so that old FAILED rows which are
+ * past the retry age no longer fill the page — this keeps requeue bounded
+ * and correct as FAILED rows accumulate.
+ */
+export const listFailedSubmissionsSince = (sinceIso: string, limit = 100) =>
+  queryAllWithRange(
+    table('submission'),
+    INDEX.submissionsByDeliveryState,
+    'deliveryState',
+    'FAILED',
+    'submittedAt',
+    sinceIso,
+    { limit }
+  );
+
 export const listPendingSubmissions = (limit = 100) =>
   listSubmissionsByDeliveryState('PENDING', limit);
+
+export const getSubmission = (id: string) => getById(table('submission'), id);
 
 export const listSubmissionsByModule = (moduleId: string) =>
   queryAll(table('submission'), INDEX.submissionsByModule, 'moduleId', moduleId, {

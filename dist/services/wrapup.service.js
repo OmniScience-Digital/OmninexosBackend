@@ -91,9 +91,7 @@ export async function processJobCardWrapUps(deps) {
                 continue;
             }
             const items = await repo.listModules(jc.id);
-            const group = jc.telegramGroupId
-                ? await repo.getTelegramGroup(jc.telegramGroupId)
-                : null;
+            const group = jc.telegramGroupId ? await repo.getTelegramGroup(jc.telegramGroupId) : null;
             const chatId = group && group.active !== false ? String(group.chatId) : null;
             // ---------------- 1. Certificate ----------------
             const certsOn = certificatesEnabled() && !!deps.sendTelegramPdf;
