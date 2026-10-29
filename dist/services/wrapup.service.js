@@ -1,4 +1,15 @@
 // src/services/wrapup.service.ts
+//
+// Sweep driven by the sparse jobCardsByWrapUpPendingAndClosedAt GSI.
+// For each closed card:
+//   1. Certificate → Telegram  → write certificateSentAt
+//   2. Certificate → ClickUp   → write certificateClickupAt
+//   3. Time message → Telegram → write totalTimePostedAt
+//   4. Time message → ClickUp  → write totalTimePostedClickupAt
+//   5. All wired channels done → remove wrapUpPending
+//
+// Local state per card avoids re-reading a stale snapshot; both channels can
+// complete in a single sweep when sends succeed.
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { certificatesEnabled } from "../helper/jobcard/jobcard.config.js";
 import { formatTotalTimeForTelegram } from "../helper/jobcard/resultFormat.js";
@@ -80,11 +91,17 @@ export async function processJobCardWrapUps(deps) {
                 ? await repo.getTelegramGroup(jc.telegramGroupId)
                 : null;
             const chatId = group && group.active !== false ? String(group.chatId) : null;
-            // ---------------- 1. Certificate ----------------
             const certsOn = certificatesEnabled();
-            const wantTelegram = certsOn && !jc.certificateSentAt && !!chatId && !!deps.sendTelegramPdf;
-            const wantClickUp = certsOn && !jc.certificateClickupAt && !!jc.clickupTaskId && !!deps.attachClickUpFile;
-            if (wantTelegram || wantClickUp) {
+            // Local state — updated as we go so a successful send doesn't get re-checked
+            // against the stale `jc` snapshot loaded at the top of this loop.
+            let certTgOk = !!jc.certificateSentAt;
+            let certCuOk = !!jc.certificateClickupAt;
+            let timeTgOk = !!jc.totalTimePostedAt;
+            let timeCuOk = !!jc.totalTimePostedClickupAt;
+            // ---------------- 1. Certificate ----------------
+            const needCertTg = certsOn && !certTgOk && !!chatId && !!deps.sendTelegramPdf;
+            const needCertCu = certsOn && !certCuOk && !!jc.clickupTaskId && !!deps.attachClickUpFile;
+            if (needCertTg || needCertCu) {
                 const scaleIds = [...new Set(items.map((i) => i.scaleId).filter(Boolean))];
                 const scales = [];
                 for (const id of scaleIds) {
@@ -100,11 +117,12 @@ export async function processJobCardWrapUps(deps) {
                     scales,
                 });
                 const filename = `${jcNumber} - certificate (placeholder).pdf`;
-                if (wantTelegram) {
+                if (needCertTg) {
                     if (await deps.sendTelegramPdf(chatId, pdf, filename, `Certificate placeholder - ${jcNumber}`)) {
                         await repo.setJobCardFields(jc.id, {
                             certificateSentAt: deps.now().toISOString(),
                         });
+                        certTgOk = true;
                         summary.certificatesSent += 1;
                         logger.info(`[wrapup] jc=${jc.id} certificate sent on Telegram`);
                     }
@@ -112,7 +130,7 @@ export async function processJobCardWrapUps(deps) {
                         logger.warn(`[wrapup] jc=${jc.id} certificate Telegram send returned false — will retry`);
                     }
                 }
-                if (wantClickUp) {
+                if (needCertCu) {
                     try {
                         await deps.attachClickUpFile(jc.clickupTaskId, {
                             data: pdf,
@@ -122,7 +140,8 @@ export async function processJobCardWrapUps(deps) {
                         await repo.setJobCardFields(jc.id, {
                             certificateClickupAt: deps.now().toISOString(),
                         });
-                        if (!wantTelegram)
+                        certCuOk = true;
+                        if (!needCertTg)
                             summary.certificatesSent += 1;
                         logger.info(`[wrapup] jc=${jc.id} certificate uploaded to ClickUp`);
                     }
@@ -131,64 +150,86 @@ export async function processJobCardWrapUps(deps) {
                     }
                 }
             }
-            // Wait for both certificate channels before the time message.
-            const certDone = !certsOn ||
-                ((!deps.sendTelegramPdf || !!jc.certificateSentAt || !chatId) &&
-                    (!deps.attachClickUpFile || !!jc.clickupTaskId === false || !!jc.certificateClickupAt));
-            // Simpler check, only when certificates are enabled:
-            const telegramCertOk = !certsOn || !deps.sendTelegramPdf || !chatId || !!jc.certificateSentAt;
-            const clickupCertOk = !certsOn || !deps.attachClickUpFile || !jc.clickupTaskId || !!jc.certificateClickupAt;
-            const readyForTime = telegramCertOk && clickupCertOk;
-            if (certsOn && !readyForTime) {
-                logger.info(`[wrapup] jc=${jc.id} time message waiting: certificate not yet done (tg=${telegramCertOk} cu=${clickupCertOk})`);
-                continue;
+            // Cert gate for the time message: when certificates are enabled and a
+            // channel is wired, that channel must be done first.
+            const certTgGate = !certsOn || !deps.sendTelegramPdf || !chatId || certTgOk;
+            const certCuGate = !certsOn || !deps.attachClickUpFile || !jc.clickupTaskId || certCuOk;
+            const certsReady = certTgGate && certCuGate;
+            if (certsOn && !certsReady) {
+                logger.info(`[wrapup] jc=${jc.id} time message waiting: certificate not yet done (tg=${certTgGate} cu=${certCuGate})`);
             }
-            // ---------------- 2. Time message ----------------
-            let timeSent = !!jc.totalTimePostedAt;
-            if (!timeSent) {
-                if (!chatId) {
-                    logger.info(`[wrapup] jc=${jc.id} time message waiting: no active Telegram group`);
-                    continue;
+            else {
+                // ---------------- 2. Time message ----------------
+                const needTimeTg = !timeTgOk && !!chatId;
+                const needTimeCu = !timeCuOk && !!jc.clickupTaskId;
+                let timeText = null;
+                if (needTimeTg || needTimeCu) {
+                    if (!allSubmitted(items)) {
+                        logger.info(`[wrapup] jc=${jc.id} time message waiting: not all modules submitted`);
+                    }
+                    else {
+                        const entries = await repo.listTimeEntries(jc.id);
+                        if (entries.length === 0) {
+                            logger.info(`[wrapup] jc=${jc.id} time message skipped: no time entries — removing marker`);
+                            await repo.setJobCardFields(jc.id, {}, ["wrapUpPending"]);
+                            summary.done += 1;
+                            continue;
+                        }
+                        if (entries.some(isOpen)) {
+                            const openIds = entries.filter(isOpen).map((e) => e.id);
+                            logger.warn(`[wrapup] jc=${jc.id} time message waiting: ${openIds.length} open time entr${openIds.length === 1 ? "y" : "ies"} (${openIds.slice(0, 3).join(", ")}${openIds.length > 3 ? ", \u2026" : ""})`);
+                        }
+                        else {
+                            timeText = formatTotalTimeForTelegram({
+                                jcNumber: jc.jcNumber ?? jc.id,
+                                customerName: jc.customerName,
+                                totalText: formatDuration(mergedMinutesTotal(entries)),
+                                people: personTimes(entries).map((p) => ({
+                                    name: p.name,
+                                    text: formatDuration(p.minutes),
+                                })),
+                            });
+                        }
+                    }
                 }
-                if (!allSubmitted(items)) {
-                    logger.info(`[wrapup] jc=${jc.id} time message waiting: not all modules submitted`);
-                    continue;
-                }
-                const entries = await repo.listTimeEntries(jc.id);
-                if (entries.length === 0) {
-                    logger.info(`[wrapup] jc=${jc.id} time message skipped: no time entries — removing marker`);
-                    await repo.setJobCardFields(jc.id, {}, ["wrapUpPending"]);
-                    summary.done += 1;
-                    continue;
-                }
-                if (entries.some(isOpen)) {
-                    const openIds = entries.filter(isOpen).map((e) => e.id);
-                    logger.warn(`[wrapup] jc=${jc.id} time message waiting: ${openIds.length} open time entr${openIds.length === 1 ? "y" : "ies"} (${openIds.slice(0, 3).join(", ")}${openIds.length > 3 ? ", \u2026" : ""})`);
-                    continue;
-                }
-                const text = formatTotalTimeForTelegram({
-                    jcNumber: jc.jcNumber ?? jc.id,
-                    customerName: jc.customerName,
-                    totalText: formatDuration(mergedMinutesTotal(entries)),
-                    people: personTimes(entries).map((p) => ({
-                        name: p.name,
-                        text: formatDuration(p.minutes),
-                    })),
-                });
-                if (await deps.sendTelegram(chatId, text)) {
-                    await repo.setJobCardFields(jc.id, {
-                        totalTimePostedAt: deps.now().toISOString(),
-                    });
-                    timeSent = true;
-                    summary.totalsPosted += 1;
-                    logger.info(`[wrapup] jc=${jc.id} time message sent`);
-                }
-                else {
-                    logger.warn(`[wrapup] jc=${jc.id} time message send returned false — will retry`);
-                    continue;
+                if (timeText) {
+                    if (needTimeTg) {
+                        if (await deps.sendTelegram(chatId, timeText)) {
+                            await repo.setJobCardFields(jc.id, {
+                                totalTimePostedAt: deps.now().toISOString(),
+                            });
+                            timeTgOk = true;
+                            summary.totalsPosted += 1;
+                            logger.info(`[wrapup] jc=${jc.id} time message sent on Telegram`);
+                        }
+                        else {
+                            logger.warn(`[wrapup] jc=${jc.id} time message Telegram send returned false — will retry`);
+                        }
+                    }
+                    if (needTimeCu) {
+                        try {
+                            // ClickUp renders Markdown; strip the Telegram backslash escapes.
+                            const cuText = timeText.replace(/\\([_*`[])/g, "$1");
+                            await deps.postClickUpComment(jc.clickupTaskId, cuText);
+                            await repo.setJobCardFields(jc.id, {
+                                totalTimePostedClickupAt: deps.now().toISOString(),
+                            });
+                            timeCuOk = true;
+                            logger.info(`[wrapup] jc=${jc.id} time message posted to ClickUp`);
+                        }
+                        catch (e) {
+                            logger.error(`[wrapup] jc=${jc.id} time message ClickUp post failed (will retry): ${msg(e)}`);
+                        }
+                    }
                 }
             }
-            if (timeSent && readyForTime) {
+            // ---------------- 3. Done? ----------------
+            // Marker removed only when every wired channel is done.
+            const finalCertTg = !certsOn || !deps.sendTelegramPdf || !chatId || certTgOk;
+            const finalCertCu = !certsOn || !deps.attachClickUpFile || !jc.clickupTaskId || certCuOk;
+            const finalTimeTg = !chatId || timeTgOk;
+            const finalTimeCu = !jc.clickupTaskId || timeCuOk;
+            if (finalCertTg && finalCertCu && finalTimeTg && finalTimeCu) {
                 await repo.setJobCardFields(jc.id, {}, ["wrapUpPending"]);
                 summary.done += 1;
                 logger.info(`[wrapup] jc=${jc.id} wrap-up complete, marker removed`);
