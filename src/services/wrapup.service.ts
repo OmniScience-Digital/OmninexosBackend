@@ -1,12 +1,11 @@
 // src/services/wrapup.service.ts
-// What happens at the END of a job card, found by a sweep that runs with the dispatcher:
-//   1. When the whole scope of work is submitted AND every result has finished delivering: post the total time to
-//      Telegram, ONCE per job card.
-//   2. When a job card is closed: send a placeholder certificate PDF (Telegram and ClickUp), once per channel.
+// What happens at the END of a job card, found by a sweep that runs with the dispatcher.
+//   1. When the job card is CLOSED: send the certificate (Telegram and ClickUp), once per channel.
+//   2. AFTER the certificate has gone out on Telegram: post the total time to Telegram, ONCE per job card.
 // Each step records what it has sent on the job card (timePostedAt, certTelegramAt, certClickupAt), so a retry
 // or a second sweep never repeats a message.
 //
-// Only job cards that finished or closed recently are touched, so switching this on never floods old job cards.
+// Only job cards that closed recently are touched, so switching this on never floods old job cards.
 // Set JOBCARD_WRAPUP_FROM (an ISO date) to choose the start; without it the last 24 hours are used.
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { certificatesEnabled } from '../helper/jobcard/jobcard.config';
@@ -129,36 +128,11 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
       const group = jc.telegramGroupId ? await repo.getTelegramGroup(jc.telegramGroupId) : null;
       const chatId = group && group.active !== false ? String(group.chatId) : null;
 
-      if (!jc.timePostedAt && chatId && allSubmitted(items)) {
-        if (!(await everyResultTerminal(repo, items, deps.now().getTime()))) {
-          logger.info(
-            `[wrapup] jc=${jc.id} all modules SUBMITTED but not all deliveries are terminal — holding back`
-          );
-        } else {
-          const completedAt = lastSubmittedAt(items);
-          const entries: any[] = await repo.listTimeEntries(jc.id);
-          if (
-            completedAt &&
-            Date.parse(completedAt) >= from &&
-            entries.length > 0 &&
-            !entries.some(isOpen)
-          ) {
-            const text = formatTotalTimeForTelegram({
-              jcNumber: jc.jcNumber ?? jc.id,
-              customerName: jc.customerName,
-              totalText: formatDuration(mergedMinutesTotal(entries)),
-              people: personTimes(entries).map((p) => ({
-                name: p.name,
-                text: formatDuration(p.minutes),
-              })),
-            });
-            if (await deps.sendTelegram(chatId, text)) {
-              await repo.setJobCardFields(jc.id, { timePostedAt: deps.now().toISOString() });
-              summary.totalsPosted += 1;
-            }
-          }
-        }
-      }
+      // ----------------------------------------------------------------
+      // 1. CERTIFICATE — fires on CLOSED, once per channel.
+      //    (Runs FIRST so the time message can gate on the Telegram cert.)
+      // ----------------------------------------------------------------
+      let certTelegramSentThisRun = false;
 
       if (jc.status === 'CLOSED' && certificatesEnabled()) {
         const closedAt = Date.parse(jc.closedAt ?? jc.updatedAt ?? '');
@@ -190,19 +164,92 @@ export async function processJobCardWrapUps(deps: DispatchDeps): Promise<WrapUpS
               )
             ) {
               await repo.setJobCardFields(jc.id, { certTelegramAt: deps.now().toISOString() });
+              certTelegramSentThisRun = true;
               sent = true;
+              logger.info(`[wrapup] jc=${jc.id} certificate sent on Telegram`);
+            } else {
+              logger.warn(`[wrapup] jc=${jc.id} certificate Telegram send returned false`);
             }
           }
           if (wantClickUp) {
-            await deps.attachClickUpFile!(jc.clickupTaskId, {
-              data: pdf,
-              contentType: 'application/pdf',
-              filename,
-            });
-            await repo.setJobCardFields(jc.id, { certClickupAt: deps.now().toISOString() });
-            sent = true;
+            try {
+              await deps.attachClickUpFile!(jc.clickupTaskId, {
+                data: pdf,
+                contentType: 'application/pdf',
+                filename,
+              });
+              await repo.setJobCardFields(jc.id, { certClickupAt: deps.now().toISOString() });
+              sent = true;
+              logger.info(`[wrapup] jc=${jc.id} certificate uploaded to ClickUp`);
+            } catch (e) {
+              logger.error(`[wrapup] jc=${jc.id} certificate ClickUp upload failed: ${msg(e)}`);
+            }
           }
           if (sent) summary.certificatesSent += 1;
+        }
+      }
+
+      // ----------------------------------------------------------------
+      // 2. TIME MESSAGE — fires on CLOSED, only AFTER the certificate
+      //    has gone out on Telegram. ClickUp cert failures don't block it.
+      //    If certificates are off or Telegram cert isn't wired, the
+      //    time message runs immediately (nothing to wait for).
+      // ----------------------------------------------------------------
+      const certTelegramOk =
+        !certificatesEnabled() ||
+        !deps.sendTelegramPdf ||
+        !!jc.certTelegramAt ||
+        certTelegramSentThisRun;
+
+      if (jc.status !== 'CLOSED') {
+        // Not closed yet — nothing to do.
+      } else if (jc.timePostedAt) {
+        // Already sent.
+      } else if (!chatId) {
+        logger.info(`[wrapup] jc=${jc.id} time message waiting: no active Telegram group`);
+      } else if (!allSubmitted(items)) {
+        logger.info(`[wrapup] jc=${jc.id} time message waiting: not all modules submitted`);
+      } else if (!certTelegramOk) {
+        logger.info(
+          `[wrapup] jc=${jc.id} time message waiting: certificate has not yet been sent on Telegram`
+        );
+      } else if (!(await everyResultTerminal(repo, items, deps.now().getTime()))) {
+        logger.info(`[wrapup] jc=${jc.id} time message waiting: not all deliveries are terminal`);
+      } else {
+        const closedAt = Date.parse(jc.closedAt ?? jc.updatedAt ?? '');
+        if (!Number.isFinite(closedAt) || closedAt < from) {
+          logger.info(
+            `[wrapup] jc=${jc.id} time message skipped: closed before JOBCARD_WRAPUP_FROM`
+          );
+        } else {
+          const entries: any[] = await repo.listTimeEntries(jc.id);
+          if (entries.length === 0) {
+            logger.info(`[wrapup] jc=${jc.id} time message skipped: no time entries`);
+          } else if (entries.some(isOpen)) {
+            const openIds = entries.filter(isOpen).map((e) => e.id);
+            logger.warn(
+              `[wrapup] jc=${jc.id} time message skipped: ${openIds.length} open time entr${
+                openIds.length === 1 ? 'y' : 'ies'
+              } (${openIds.slice(0, 3).join(', ')}${openIds.length > 3 ? ', …' : ''})`
+            );
+          } else {
+            const text = formatTotalTimeForTelegram({
+              jcNumber: jc.jcNumber ?? jc.id,
+              customerName: jc.customerName,
+              totalText: formatDuration(mergedMinutesTotal(entries)),
+              people: personTimes(entries).map((p) => ({
+                name: p.name,
+                text: formatDuration(p.minutes),
+              })),
+            });
+            if (await deps.sendTelegram(chatId, text)) {
+              await repo.setJobCardFields(jc.id, { timePostedAt: deps.now().toISOString() });
+              summary.totalsPosted += 1;
+              logger.info(`[wrapup] jc=${jc.id} time message sent`);
+            } else {
+              logger.warn(`[wrapup] jc=${jc.id} time message send returned false — will retry`);
+            }
+          }
         }
       }
     } catch (e) {
