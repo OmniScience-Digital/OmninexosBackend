@@ -84,7 +84,7 @@ export async function listJobCardsAwaitingWrapUp() {
     do {
         const res = await dynamoClient.send(new ScanCommand({
             TableName: table("jobCard"),
-            FilterExpression: "attribute_not_exists(timePostedAt) OR (#st = :closed AND (attribute_not_exists(certTelegramAt) OR attribute_not_exists(certClickupAt)))",
+            FilterExpression: "attribute_not_exists(totalTimePostedAt) OR (#st = :closed AND (attribute_not_exists(certTelegramAt) OR attribute_not_exists(certClickupAt)))",
             ExpressionAttributeNames: { "#st": "status" },
             ExpressionAttributeValues: marshall({ ":closed": "CLOSED" }),
             ExclusiveStartKey: startKey,
