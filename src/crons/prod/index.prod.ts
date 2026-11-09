@@ -6,6 +6,7 @@ import { getFleetTasks } from '../../helper/task/task.helper';
 import { FleetController } from '../../controllers/cron.fleetController';
 import { addQuoteJob } from '../../queues/quotes.queue';
 import { addJobCardDispatchJob } from '../../queues/jobcard.queue'; // JOBCARD
+import { addTicketJobs } from '../../queues/ticket.queue'; // TICKETING
 
 logger.info('Prod Cron Loaded');
 
@@ -13,9 +14,32 @@ logger.info('Prod Cron Loaded');
 const timeZone = 'Africa/Johannesburg';
 
 (async () => {
-  logger.info('🕒 Starting Prod Quote cron...');
-  await addQuoteJob();
-  await addJobCardDispatchJob(); // JOBCARD: check for submitted results every 20s
+  try {
+    logger.info('🕒 Starting Prod Quote cron...');
+    await addQuoteJob();
+  } catch (err) {
+    logger.error('Could not schedule quote job:', err);
+  }
+})();
+
+// JOBCARD: its own block so a failure in the quote job above can never stop it
+(async () => {
+  try {
+    await addJobCardDispatchJob(); // check for submitted results
+    logger.info('🕒 Job card dispatch job scheduled');
+  } catch (err) {
+    logger.error('Could not schedule job card job:', err);
+  }
+})();
+
+// TICKETING: its own block so a failure here can never stop the quote / job card jobs above
+(async () => {
+  try {
+    await addTicketJobs();
+    logger.info('🕒 Ticket intake (15s) and sync (5min) jobs scheduled');
+  } catch (err) {
+    logger.error('Could not schedule ticket jobs:', err);
+  }
 })();
 
 //Task 1am cron

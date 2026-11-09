@@ -14,6 +14,7 @@ import routes from './routes/api.route';
 // workers for xero
 import './workers/quotes.worker';
 import './workers/jobcard.worker'; // JOBCARD: handles submitted results (timer, certificates, ClickUp, Telegram)
+import './workers/ticket.worker'; // TICKETING: task form -> ClickUp, updates to Telegram, escalations
 //import './workers/purchases.worker';
 
 // keepalive cron - prevents Xero refresh token from expiring during inactivity

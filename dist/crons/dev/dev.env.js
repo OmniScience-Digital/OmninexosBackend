@@ -39,11 +39,35 @@ logger.info("Dev Cron Loaded");
 })();
 import { addQuoteJob } from "../../queues/quotes.queue.js";
 import { addJobCardDispatchJob } from "../../queues/jobcard.queue.js";
+import { addTicketJobs } from "../../queues/ticket.queue.js"; // TICKETING
 (async () => {
-    logger.info("\uD83D\uDD52 Starting quote cron...");
-    await addQuoteJob();
-    logger.info("\uD83D\uDD52 Starting job card dispatch cron...");
-    await addJobCardDispatchJob();
+    try {
+        logger.info("\uD83D\uDD52 Starting quote cron...");
+        await addQuoteJob();
+    }
+    catch (err) {
+        logger.error("Could not schedule quote job:", err);
+    }
+})();
+// JOBCARD: its own block so a failure in the quote job above can never stop it
+(async () => {
+    try {
+        logger.info("\uD83D\uDD52 Starting job card dispatch cron...");
+        await addJobCardDispatchJob();
+    }
+    catch (err) {
+        logger.error("Could not schedule job card job:", err);
+    }
+})();
+// TICKETING
+(async () => {
+    try {
+        await addTicketJobs();
+        logger.info("\uD83D\uDD52 Ticket intake and sync jobs scheduled");
+    }
+    catch (err) {
+        logger.error("Could not schedule ticket jobs:", err);
+    }
 })();
 // import { addPurchaseJob } from '../../queues/purchases.queue';
 // (async () => {

@@ -13,6 +13,7 @@ import routes from "./routes/api.route.js";
 // workers for xero
 import "./workers/quotes.worker.js";
 import "./workers/jobcard.worker.js"; // JOBCARD: handles submitted results (timer, certificates, ClickUp, Telegram)
+import "./workers/ticket.worker.js"; // TICKETING: task form -> ClickUp, updates to Telegram, escalations
 //import './workers/purchases.worker';
 // keepalive cron - prevents Xero refresh token from expiring during inactivity
 import "./crons/xero.tokenKeepalive.cron.js";
