@@ -22,46 +22,46 @@ const timeZone = 'Africa/Johannesburg';
   }
 })();
 
-// JOBCARD: its own block so a failure in the quote job above can never stop it
-(async () => {
-  try {
-    await addJobCardDispatchJob(); // check for submitted results
-    logger.info('🕒 Job card dispatch job scheduled');
-  } catch (err) {
-    logger.error('Could not schedule job card job:', err);
-  }
-})();
+// // JOBCARD: its own block so a failure in the quote job above can never stop it
+// (async () => {
+//   try {
+//     await addJobCardDispatchJob(); // check for submitted results
+//     logger.info('🕒 Job card dispatch job scheduled');
+//   } catch (err) {
+//     logger.error('Could not schedule job card job:', err);
+//   }
+// })();
 
-// TICKETING: its own block so a failure here can never stop the quote / job card jobs above
-(async () => {
-  try {
-    await addTicketJobs();
-    logger.info('🕒 Ticket intake (15s) and sync (5min) jobs scheduled');
-  } catch (err) {
-    logger.error('Could not schedule ticket jobs:', err);
-  }
-})();
+// // TICKETING: its own block so a failure here can never stop the quote / job card jobs above
+// (async () => {
+//   try {
+//     await addTicketJobs();
+//     logger.info('🕒 Ticket intake (15s) and sync (5min) jobs scheduled');
+//   } catch (err) {
+//     logger.error('Could not schedule ticket jobs:', err);
+//   }
+// })();
 
 //Task 1am cron
 
-cron.schedule(
-  '0 1 * * *',
-  async () => {
-    try {
-      logger.info('[CRON] Triggered 01:00 (2AM) Task Check');
+// cron.schedule(
+//   '0 1 * * *',
+//   async () => {
+//     try {
+//       logger.info('[CRON] Triggered 01:00 (2AM) Task Check');
 
-      const fleets = await getFleetvehicles();
-      const tasks = await getFleetTasks();
+//       const fleets = await getFleetvehicles();
+//       const tasks = await getFleetTasks();
 
-      if (fleets && tasks) {
-        //call fleet controller
-        await FleetController(fleets, tasks);
-      } else {
-        logger.warn('No valid progressive sites to process');
-      }
-    } catch (error: any) {
-      logger.error('Runtime error:', error);
-    }
-  },
-  { timezone: timeZone }
-);
+//       if (fleets && tasks) {
+//         //call fleet controller
+//         await FleetController(fleets, tasks);
+//       } else {
+//         logger.warn('No valid progressive sites to process');
+//       }
+//     } catch (error: any) {
+//       logger.error('Runtime error:', error);
+//     }
+//   },
+//   { timezone: timeZone }
+// );

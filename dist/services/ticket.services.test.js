@@ -511,7 +511,14 @@ const TEAM_BODY = {
         {
             id: "900",
             members: [
-                { user: { id: 1, username: "Marco Venter", email: "marco@x.co", profilePicture: "https://a/1.png" } },
+                {
+                    user: {
+                        id: 1,
+                        username: "Marco Venter",
+                        email: "marco@x.co",
+                        profilePicture: "https://a/1.png",
+                    },
+                },
                 { user: { id: 5, username: "Karin Dean", email: "karin@x.co", profilePicture: null } },
                 { user: { id: 6, username: "", email: "invited@x.co" } }, // no name yet: falls back to the email start
                 { user: { id: "abc", username: "Broken" } }, // no usable id: skipped
@@ -543,7 +550,12 @@ test("merge: one entry per user, the list wins, missing details are filled in", 
         { id: 5, username: "Karin Dean" },
     ]);
     assert.equal(merged.length, 2);
-    assert.deepEqual(merged[0], { id: 1, username: "Marco Venter", email: "marco@x.co", avatarUrl: "https://a/1.png" });
+    assert.deepEqual(merged[0], {
+        id: 1,
+        username: "Marco Venter",
+        email: "marco@x.co",
+        avatarUrl: "https://a/1.png",
+    });
     assert.equal(merged[1].username, "Karin Dean");
 });
 test("merge: a picked person who is in the workspace but not on the list is now found, not sent to Gleed", () => {

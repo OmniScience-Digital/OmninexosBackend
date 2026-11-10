@@ -9,6 +9,9 @@ function executiontime(app) {
             // Skip logging noisy 404s (bot scans hitting random paths)
             if (status === 404)
                 return;
+            // Skip successful health checks (GET / every ~30s from the load balancer). Failures still log.
+            if (req.method === "GET" && req.path === "/" && status < 400)
+                return;
             const statusEmoji = status >= 400 ? "\u274C" : status >= 300 ? "\u21AA\uFE0F" : "\u2705";
             logger.info(`${statusEmoji} ${req.method} ${req.url} - ` + `Status: ${status} - Duration: ${duration}ms`);
         });

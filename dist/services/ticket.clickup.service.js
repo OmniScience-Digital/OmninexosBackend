@@ -43,7 +43,9 @@ export function mergeMembers(...lists) {
     const byId = new Map();
     for (const m of lists.flat()) {
         const cur = byId.get(m.id);
-        byId.set(m.id, cur ? { ...m, ...cur, email: cur.email ?? m.email, avatarUrl: cur.avatarUrl ?? m.avatarUrl } : m);
+        byId.set(m.id, cur
+            ? { ...m, ...cur, email: cur.email ?? m.email, avatarUrl: cur.avatarUrl ?? m.avatarUrl }
+            : m);
     }
     return [...byId.values()];
 }

@@ -1,3 +1,4 @@
+// src/middlewares/execution.middleware.ts  (MODIFIED - health check logging removed)
 import { Express, Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger';
 
@@ -13,6 +14,9 @@ function executiontime(app: Express) {
 
       // Skip logging noisy 404s (bot scans hitting random paths)
       if (status === 404) return;
+
+      // Skip successful health checks (GET / every ~30s from the load balancer). Failures still log.
+      if (req.method === 'GET' && req.path === '/' && status < 400) return;
 
       const statusEmoji = status >= 400 ? '❌' : status >= 300 ? '↪️' : '✅';
 

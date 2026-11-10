@@ -1,3 +1,4 @@
+// src/helper/tokens/token.helper.ts  (MODIFIED - search "XERO-API-ESCALATION")
 import { randomUUID } from 'crypto';
 import {
   getXeroConfig,
@@ -187,4 +188,28 @@ export async function getAccessToken(): Promise<string> {
   }
 
   return withLock(refreshAccessTokenOnce);
+}
+
+// XERO-API-ESCALATION: a failed Xero API call (403 forbidden, 400 validation, ...) is not a token
+// refresh failure, so it never raised a ClickUp task. This does it, once per outage per `key`;
+// call clearXeroApiEscalation(key) after a success so the next outage escalates again.
+const apiEscalationsRaised = new Set<string>();
+
+export async function raiseXeroApiEscalation(
+  key: string,
+  title: string,
+  details: string
+): Promise<void> {
+  if (apiEscalationsRaised.has(key)) return;
+  apiEscalationsRaised.add(key);
+  try {
+    await createEscalationTask(title, details);
+  } catch (err) {
+    apiEscalationsRaised.delete(key); // ClickUp itself failed: try again on the next failure
+    logger.error(`[Xero] Could not create the ClickUp escalation task for "${key}":`, err);
+  }
+}
+
+export function clearXeroApiEscalation(key: string): void {
+  apiEscalationsRaised.delete(key);
 }
