@@ -1,7 +1,7 @@
 // src/services/ticket.roster.service.ts
 // TICKETING: keeps the ClickUpMember table (what the Task Form's people picker reads) equal to the
-// members of the ClickUp list. To add someone to the picker, add them to the ClickUp list; they show up
-// within a few minutes. Someone removed from ClickUp is switched off (isActive = false), not deleted,
+// people in the ClickUp workspace (plus the list's members). To add someone to the picker, add them to
+// ClickUp; they show up within a few minutes. Someone removed from ClickUp is switched off (isActive = false), not deleted,
 // so old tickets keep their names.
 import type * as Repo from '../repositories/dynamo.ticket.repository';
 import type { TicketClickUp } from './ticket.clickup.service';

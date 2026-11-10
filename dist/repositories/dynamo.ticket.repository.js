@@ -1,4 +1,4 @@
-// src/repositories/dynamo.ticket.repository.ts 
+// src/repositories/dynamo.ticket.repository.ts
 // TICKETING: all DynamoDB access for the Ticket / TicketCounter tables.
 // Same conventions as dynamo.jobcardflow.repository.ts (raw DynamoDB client, Amplify table and
 // index names, sparse lease column instead of locks).

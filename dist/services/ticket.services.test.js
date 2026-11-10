@@ -1,9 +1,10 @@
-// src/services/ticket.services.test.ts  (run with: npm test)
+// src/services/ticket.services.test.ts  (MODIFIED - WORKSPACE-MEMBERS tests at the end)
 // Runs the real intake and sync services against in-memory fakes of DynamoDB, ClickUp and Telegram.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { processSubmittedTickets } from "./ticket.intake.service.js";
 import { syncOpenTickets } from "./ticket.sync.service.js";
+import { membersFromWorkspaces, mergeMembers } from "./ticket.clickup.service.js";
 import { resolveAssignees, resolveTicketAssignees } from "../helper/ticket/ticket.assignees.js";
 import { refreshRoster } from "./ticket.roster.service.js";
 import { BOT_SIGNATURE, MAX_ATTEMPTS, getBusinessCalendar } from "../helper/ticket/ticket.config.js";
@@ -503,4 +504,52 @@ test("roster: an empty ClickUp answer never switches everyone off", async () => 
     r.setMembers([]);
     assert.equal(await r.run(), 0);
     assert.equal(r.table.get("1").isActive, true);
+});
+// ------------------------------------------------------------------ WORKSPACE-MEMBERS
+const TEAM_BODY = {
+    teams: [
+        {
+            id: "900",
+            members: [
+                { user: { id: 1, username: "Marco Venter", email: "marco@x.co", profilePicture: "https://a/1.png" } },
+                { user: { id: 5, username: "Karin Dean", email: "karin@x.co", profilePicture: null } },
+                { user: { id: 6, username: "", email: "invited@x.co" } }, // no name yet: falls back to the email start
+                { user: { id: "abc", username: "Broken" } }, // no usable id: skipped
+                { user: { id: 7, username: "" } }, // no name and no email: skipped
+            ],
+        },
+        { id: "901", members: [{ user: { id: 8, username: "Other Workspace" } }] },
+    ],
+};
+test("workspace members: reads every workspace, names fall back to the email, unusable entries are skipped", () => {
+    const m = membersFromWorkspaces(TEAM_BODY);
+    assert.deepEqual(m.map((x) => [x.id, x.username]), [
+        [1, "Marco Venter"],
+        [5, "Karin Dean"],
+        [6, "invited"],
+        [8, "Other Workspace"],
+    ]);
+    assert.equal(m[0].avatarUrl, "https://a/1.png");
+    assert.equal(m[1].avatarUrl, undefined);
+});
+test("workspace members: TICKET_CLICKUP_TEAM_ID limits it to one workspace; odd answers give nobody", () => {
+    assert.deepEqual(membersFromWorkspaces(TEAM_BODY, "901").map((x) => x.id), [8]);
+    assert.deepEqual(membersFromWorkspaces({}), []);
+    assert.deepEqual(membersFromWorkspaces(null), []);
+});
+test("merge: one entry per user, the list wins, missing details are filled in", () => {
+    const merged = mergeMembers([{ id: 1, username: "Marco Venter" }], [
+        { id: 1, username: "Marco V", email: "marco@x.co", avatarUrl: "https://a/1.png" },
+        { id: 5, username: "Karin Dean" },
+    ]);
+    assert.equal(merged.length, 2);
+    assert.deepEqual(merged[0], { id: 1, username: "Marco Venter", email: "marco@x.co", avatarUrl: "https://a/1.png" });
+    assert.equal(merged[1].username, "Karin Dean");
+});
+test("merge: a picked person who is in the workspace but not on the list is now found, not sent to Gleed", () => {
+    const everyone = mergeMembers([{ id: 9, username: "Gleed Nkosi" }], [{ id: 5, username: "Karin Dean" }]);
+    const r = resolveTicketAssignees(["Karin Dean"], ["5"], everyone, 9, {}, "Gleed");
+    assert.equal(r.assignees[0].clickupUserId, 5);
+    assert.equal(r.assignees[0].fallback, false);
+    assert.deepEqual(r.warnings, []);
 });

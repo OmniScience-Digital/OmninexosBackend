@@ -1,7 +1,8 @@
-// src/services/ticket.clickup.service.ts
+// src/services/ticket.clickup.service.ts  (MODIFIED - search "WORKSPACE-MEMBERS")
 // TICKETING: the ClickUp calls the ticket flow needs. Goes through clickupFetch so it shares the
 // backend's per-minute ClickUp budget and 429 retry handling.
 import 'dotenv/config';
+import logger from '../utils/logger';
 import { clickupFetch } from './clickup.throttle';
 import type { CommentBlock } from '../helper/ticket/ticket.format';
 
@@ -23,6 +24,10 @@ export interface ClickUpComment {
 
 /** What the intake and sync services need from ClickUp (a fake of this is used in the tests). */
 export interface TicketClickUp {
+  /**
+   * Everyone the system can assign to: the whole ClickUp workspace plus the list's members.
+   * (WORKSPACE-MEMBERS: the name is historic; it used to return only the list's members.)
+   */
   getListMembers(): Promise<ClickUpMember[]>;
   createTask(input: {
     name: string;
@@ -49,6 +54,47 @@ async function fail(
   throw new Error(`ClickUp ${what} failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
+/**
+ * WORKSPACE-MEMBERS: turns ClickUp's "GET /team" answer into members. Uses every workspace the
+ * token can see, or only TICKET_CLICKUP_TEAM_ID when that is set. Skips entries with no usable id
+ * or name (for example an invite nobody accepted yet).
+ */
+export function membersFromWorkspaces(body: any, teamId?: string): ClickUpMember[] {
+  const teams: any[] = (body?.teams ?? []).filter((t: any) => !teamId || String(t.id) === teamId);
+  const out: ClickUpMember[] = [];
+  for (const team of teams) {
+    for (const entry of team.members ?? []) {
+      const u = entry?.user ?? entry;
+      const id = Number(u?.id);
+      const email = u?.email ? String(u.email) : undefined;
+      const username = String(u?.username ?? '').trim() || (email ? email.split('@')[0] : '');
+      if (!Number.isFinite(id) || !username) continue;
+      out.push({
+        id,
+        username,
+        email,
+        avatarUrl: u?.profilePicture ? String(u.profilePicture) : undefined,
+      });
+    }
+  }
+  return out;
+}
+
+/** One entry per ClickUp user id. The first list wins; later lists only fill in what is missing. */
+export function mergeMembers(...lists: ClickUpMember[][]): ClickUpMember[] {
+  const byId = new Map<number, ClickUpMember>();
+  for (const m of lists.flat()) {
+    const cur = byId.get(m.id);
+    byId.set(
+      m.id,
+      cur
+        ? { ...m, ...cur, email: cur.email ?? m.email, avatarUrl: cur.avatarUrl ?? m.avatarUrl }
+        : m
+    );
+  }
+  return [...byId.values()];
+}
+
 const MEMBERS_TTL_MS = 10 * 60_000;
 let membersCache: { at: number; list: ClickUpMember[] } | null = null;
 
@@ -61,12 +107,31 @@ export const clickUpTicketApi: TicketClickUp = {
     });
     if (!res.ok) await fail('get list members', res);
     const body: any = await res.json();
-    const list: ClickUpMember[] = (body.members ?? []).map((m: any) => ({
+    const listMembers: ClickUpMember[] = (body.members ?? []).map((m: any) => ({
       id: Number(m.id),
       username: String(m.username ?? ''),
       email: m.email ? String(m.email) : undefined,
       avatarUrl: m.profilePicture ? String(m.profilePicture) : undefined,
     }));
+
+    // WORKSPACE-MEMBERS: the list call only returns people with access to that one list, so add the
+    // rest of the workspace. If this call fails, carry on with the list's members rather than
+    // breaking ticket intake.
+    let workspaceMembers: ClickUpMember[] = [];
+    try {
+      const wsRes = await clickupFetch(`${API}/team`, { method: 'GET', headers: headers() });
+      if (!wsRes.ok) throw new Error(`${wsRes.status} ${(await wsRes.text()).slice(0, 200)}`);
+      workspaceMembers = membersFromWorkspaces(
+        await wsRes.json(),
+        process.env.TICKET_CLICKUP_TEAM_ID
+      );
+    } catch (err) {
+      logger.warn(
+        `[ticket] could not read ClickUp workspace members, using the list's members only: ${err}`
+      );
+    }
+
+    const list = mergeMembers(listMembers, workspaceMembers);
     membersCache = { at: Date.now(), list };
     return list;
   },
