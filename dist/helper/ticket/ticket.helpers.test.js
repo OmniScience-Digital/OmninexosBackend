@@ -84,16 +84,30 @@ test("steps already done are not repeated", () => {
     assert.deepEqual(dueEscalations(base({ now, followUpDone: true, gleedDone: true }), cal), []);
 });
 test("after downtime both steps come out in order", () => {
-    assert.deepEqual(dueEscalations(base({ now: sast("2026-11-09T14:00:00") }), cal), ["followUp", "gleed"]);
+    assert.deepEqual(dueEscalations(base({ now: sast("2026-11-09T14:00:00") }), cal), [
+        "followUp",
+        "gleed",
+    ]);
 });
 test("ASAP escalates on the first check inside business hours", () => {
-    const t = base({ urgencyMinutes: 0, submittedAt: sast("2026-11-09T10:00:00"), now: sast("2026-11-09T10:05:00") });
+    const t = base({
+        urgencyMinutes: 0,
+        submittedAt: sast("2026-11-09T10:00:00"),
+        now: sast("2026-11-09T10:05:00"),
+    });
     assert.deepEqual(dueEscalations(t, cal), ["followUp", "gleed"]);
 });
 test("nothing is posted outside business hours, it waits for 06:00", () => {
-    const t = base({ urgencyMinutes: 0, submittedAt: sast("2026-11-09T21:00:00"), now: sast("2026-11-09T21:05:00") });
+    const t = base({
+        urgencyMinutes: 0,
+        submittedAt: sast("2026-11-09T21:00:00"),
+        now: sast("2026-11-09T21:05:00"),
+    });
     assert.deepEqual(dueEscalations(t, cal), []);
-    assert.deepEqual(dueEscalations({ ...t, now: sast("2026-11-10T06:05:00") }, cal), ["followUp", "gleed"]);
+    assert.deepEqual(dueEscalations({ ...t, now: sast("2026-11-10T06:05:00") }, cal), [
+        "followUp",
+        "gleed",
+    ]);
 });
 test("overnight time does not count: 16H task submitted 16:00", () => {
     const t = base({ urgencyMinutes: 960, submittedAt: sast("2026-11-09T16:00:00") });

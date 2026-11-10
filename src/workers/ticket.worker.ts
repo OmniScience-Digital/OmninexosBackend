@@ -14,6 +14,8 @@ import {
   assigneeOverrides,
   escalationUserId,
   getBusinessCalendar,
+  missingFlowVars,
+  missingRosterVars,
   notifyOnCreate,
   numberPad,
   rosterEnabled,
@@ -41,13 +43,23 @@ const intakeDeps = (): IntakeDeps => ({
 
 const syncDeps = (): SyncDeps => common();
 
-let warned = false;
+let warnedFlow = false;
 const enabled = () => {
   if (ticketFlowEnabled()) return true;
-  if (!warned) {
-    warned = true;
+  if (!warnedFlow) {
+    warnedFlow = true;
+    logger.warn(`[ticket] flow is off. Missing in .env: ${missingFlowVars().join(', ')}`);
+  }
+  return false;
+};
+
+let warnedRoster = false;
+const rosterOn = () => {
+  if (rosterEnabled()) return true;
+  if (!warnedRoster) {
+    warnedRoster = true;
     logger.warn(
-      '[ticket] flow is off: set the TICKET_* / TASKING_TELEGRAM_CHAT_ID variables (see TICKETING.md)'
+      `[ticket] people list refresh is off. Missing in .env: ${missingRosterVars().join(', ')}`
     );
   }
   return false;
@@ -64,7 +76,7 @@ export const ticketIntakeWorker = createWorker('ticket-intake', async () => {
 
 export const ticketSyncWorker = createWorker('ticket-sync', async () => {
   // Keep the form's people list in step with ClickUp (runs even before Telegram is configured).
-  if (rosterEnabled()) {
+  if (rosterOn()) {
     try {
       const changed = await refreshRoster({ repo, clickup: clickUpTicketApi });
       if (changed > 0)

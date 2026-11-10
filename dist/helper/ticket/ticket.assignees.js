@@ -1,4 +1,7 @@
-const words = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+const words = (s) => s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
 export function matchMember(name, members) {
     const wanted = name.trim().toLowerCase();
     if (!wanted)
@@ -30,12 +33,20 @@ export function resolveAssignees(names, members, overrides, gleedName, fallbackI
         else {
             const why = 'reason' in found ? found.reason : 'none';
             warnings.push(`"${name}" ${why === 'ambiguous' ? 'matches several ClickUp users' : 'is not on ClickUp'}; assigned to ${gleedName}`);
-            assignees.push({ name, clickupUserId: fallbackId !== undefined ? fallbackId : (gleed?.id ?? null), fallback: true });
+            assignees.push({
+                name,
+                clickupUserId: fallbackId !== undefined ? fallbackId : (gleed?.id ?? null),
+                fallback: true,
+            });
         }
     }
     // Nobody selected (the form requires one, but never create an unowned task if it slips through).
     if (assignees.length === 0) {
-        assignees.push({ name: gleedName, clickupUserId: fallbackId !== undefined ? fallbackId : (gleed?.id ?? null), fallback: false });
+        assignees.push({
+            name: gleedName,
+            clickupUserId: fallbackId !== undefined ? fallbackId : (gleed?.id ?? null),
+            fallback: false,
+        });
     }
     return { assignees, gleed, warnings };
 }
@@ -87,7 +98,11 @@ export function resolveTicketAssignees(names, clickupIds, members, fallbackId, o
         }
         else {
             warnings.push(`${missing} picked person(s) have no ClickUp account; assigned to the fallback user`);
-            assignees.push({ name: `${missing} without a ClickUp account`, clickupUserId: fallbackId, fallback: true });
+            assignees.push({
+                name: `${missing} without a ClickUp account`,
+                clickupUserId: fallbackId,
+                fallback: true,
+            });
         }
     }
     return { assignees, warnings };

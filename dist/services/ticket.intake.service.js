@@ -1,10 +1,10 @@
-// src/services/ticket.intake.service.ts  
+// src/services/ticket.intake.service.ts
 // TICKETING: picks up SUBMITTED tickets (saved by the web form) and turns each into a numbered
 // ClickUp task. Safe to re-run: the number is allocated once, computed values are saved before the
 // ClickUp call, and a ticket that already has a ClickUp task id never creates a second task.
 import logger from "../utils/logger.js";
 import { addBusinessMinutes } from "../helper/ticket/businessTime.js";
-import { assigneeIds, escalationTarget, resolveTicketAssignees } from "../helper/ticket/ticket.assignees.js";
+import { assigneeIds, escalationTarget, resolveTicketAssignees, } from "../helper/ticket/ticket.assignees.js";
 import { buildDescription, buildTaskName, formatTicketNumber, telegramCreatedMessage, } from "../helper/ticket/ticket.format.js";
 import { INTAKE_BATCH, INTAKE_LEASE_MS, MAX_ATTEMPTS, URGENCY_MINUTES, isKnownUrgency, } from "../helper/ticket/ticket.config.js";
 const backoffMs = (attempts) => Math.min(15000 * 2 ** attempts, 10 * 60000);
@@ -76,13 +76,20 @@ async function processTicket(deps, row) {
     if (!taskId) {
         const created = await deps.clickup.createTask({
             name: taskName,
-            description: buildDescription({ assignees: resolved, dueAt, requiredOutcome: row.requiredOutcome }),
+            description: buildDescription({
+                assignees: resolved,
+                dueAt,
+                requiredOutcome: row.requiredOutcome,
+            }),
             assigneeIds: assigneeIds(resolved),
             dueAt,
         });
         taskId = created.id;
         taskUrl = created.url;
-        await saveWithRetry(() => deps.repo.updateTicket(row.id, { clickupTaskId: taskId, clickupTaskUrl: taskUrl ?? undefined }), taskId);
+        await saveWithRetry(() => deps.repo.updateTicket(row.id, {
+            clickupTaskId: taskId,
+            clickupTaskUrl: taskUrl ?? undefined,
+        }), taskId);
     }
     // 4. Go live: from here the 5 minute sync follows the ticket.
     await deps.repo.updateTicket(row.id, {
@@ -93,7 +100,9 @@ async function processTicket(deps, row) {
     logger.info(`[ticket] ${ticketNumber} created in ClickUp (${taskId})`);
     if (deps.notifyOnCreate) {
         const names = resolved.map((a) => a.name);
-        await deps.sendTelegram(deps.telegramChatId, telegramCreatedMessage(taskName, names, dueAt)).catch(() => false);
+        await deps
+            .sendTelegram(deps.telegramChatId, telegramCreatedMessage(taskName, names, dueAt))
+            .catch(() => false);
     }
     return true;
 }
@@ -128,7 +137,9 @@ async function recordFailure(deps, row, err) {
     logger.error(`[ticket] ${row.id} attempt ${attempts} failed: ${message}`);
     try {
         if (attempts >= MAX_ATTEMPTS) {
-            await deps.repo.updateTicket(row.id, { status: "FAILED", attempts, lastError: message }, ["lockedUntil"]);
+            await deps.repo.updateTicket(row.id, { status: "FAILED", attempts, lastError: message }, [
+                "lockedUntil",
+            ]);
             await deps.raiseEscalation?.(`Task ticket could not be created (${row.ticketNumber ?? row.id})`, `Ticket "${row.title}" failed ${attempts} times.\nLast error: ${message}\nTicket id: ${row.id}`);
         }
         else {

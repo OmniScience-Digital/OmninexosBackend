@@ -11,7 +11,13 @@ export async function refreshRoster(deps) {
             (cur.avatarUrl ?? undefined) === m.avatarUrl &&
             cur.isActive === true;
         if (!same) {
-            await deps.repo.putMember({ id, name: m.username, email: m.email, avatarUrl: m.avatarUrl, isActive: true });
+            await deps.repo.putMember({
+                id,
+                name: m.username,
+                email: m.email,
+                avatarUrl: m.avatarUrl,
+                isActive: true,
+            });
             saved++;
         }
     }
@@ -20,7 +26,13 @@ export async function refreshRoster(deps) {
         const live = new Set(members.map((m) => String(m.id)));
         for (const [id, cur] of existing) {
             if (!live.has(id) && cur.isActive !== false) {
-                await deps.repo.putMember({ id, name: cur.name, email: cur.email, avatarUrl: cur.avatarUrl, isActive: false });
+                await deps.repo.putMember({
+                    id,
+                    name: cur.name,
+                    email: cur.email,
+                    avatarUrl: cur.avatarUrl,
+                    isActive: false,
+                });
                 saved++;
             }
         }

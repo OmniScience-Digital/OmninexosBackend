@@ -1,4 +1,4 @@
-// src/services/ticket.clickup.service.ts  
+// src/services/ticket.clickup.service.ts
 // TICKETING: the ClickUp calls the ticket flow needs. Goes through clickupFetch so it shares the
 // backend's per-minute ClickUp budget and 429 retry handling.
 import "dotenv/config";
@@ -67,8 +67,13 @@ export const clickUpTicketApi = {
         let start;
         let startId;
         for (let page = 0; page < 10; page++) {
-            const qs = start ? `?start=${encodeURIComponent(start)}&start_id=${encodeURIComponent(startId)}` : "";
-            const res = await clickupFetch(`${API}/task/${taskId}/comment${qs}`, { method: "GET", headers: headers() });
+            const qs = start
+                ? `?start=${encodeURIComponent(start)}&start_id=${encodeURIComponent(startId)}`
+                : "";
+            const res = await clickupFetch(`${API}/task/${taskId}/comment${qs}`, {
+                method: "GET",
+                headers: headers(),
+            });
             if (!res.ok)
                 await fail("get comments", res);
             const body = await res.json();

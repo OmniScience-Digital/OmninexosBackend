@@ -21,7 +21,10 @@ function world(start = "2026-11-09T08:00:00") {
     let counter = 0;
     const repo = {
         async listTicketsByStatus(status, max) {
-            return [...rows.values()].filter((r) => r.status === status).slice(0, max).map((r) => structuredClone(r));
+            return [...rows.values()]
+                .filter((r) => r.status === status)
+                .slice(0, max)
+                .map((r) => structuredClone(r));
         },
         async claimTicket(id, expect, nowMs, leaseMs) {
             const r = rows.get(id);
@@ -82,13 +85,21 @@ function world(start = "2026-11-09T08:00:00") {
             return t ? { id, statusType: t.statusType } : null;
         },
         async listComments(id, since) {
-            return (comments[id] ?? []).filter((c) => c.dateMs > since).sort((a, b) => a.dateMs - b.dateMs);
+            return (comments[id] ?? [])
+                .filter((c) => c.dateMs > since)
+                .sort((a, b) => a.dateMs - b.dateMs);
         },
         async postComment(id, blocks) {
             const cid = `bot${nextId++}`;
             posted.push({ taskId: id, blocks });
             const text = blocks.map((b) => ("text" in b ? b.text : "@tag")).join("");
-            comments[id].push({ id: cid, text, userId: 99, userName: "Token owner", dateMs: clock.getTime() });
+            comments[id].push({
+                id: cid,
+                text,
+                userId: 99,
+                userName: "Token owner",
+                dateMs: clock.getTime(),
+            });
             return { id: cid };
         },
     };
@@ -148,7 +159,13 @@ function world(start = "2026-11-09T08:00:00") {
         setClock: (iso) => (clock = sast(iso)),
         advance: (ms) => (clock = new Date(clock.getTime() + ms)),
         setTelegramOk: (ok) => (telegramOk = ok),
-        human: (taskId, text, at, name = "Sean Fray") => comments[taskId].push({ id: `h${nextId++}`, text, userId: 1, userName: name, dateMs: sast(at).getTime() }),
+        human: (taskId, text, at, name = "Sean Fray") => comments[taskId].push({
+            id: `h${nextId++}`,
+            text,
+            userId: 1,
+            userName: name,
+            dateMs: sast(at).getTime(),
+        }),
     };
 }
 // ------------------------------------------------------------------ intake
@@ -253,7 +270,9 @@ test("sync: a person's comment goes to Telegram once and counts as an update", a
     w.advance(5 * 60000);
     w.human(taskId, "I have started", "2026-11-09T08:03:00");
     await syncOpenTickets(w.sync);
-    assert.deepEqual(w.telegram, ["T-0001, Fix the pump\nSean Fray sent this message: I have started"]);
+    assert.deepEqual(w.telegram, [
+        "T-0001, Fix the pump\nSean Fray sent this message: I have started",
+    ]);
     assert.equal(w.rows.get(id).hasUpdate, true);
     w.advance(5 * 60000);
     await syncOpenTickets(w.sync);
@@ -402,7 +421,11 @@ test("resolveTicketAssignees: nobody picked still gets an owner", () => {
 });
 test("resolveTicketAssignees: two without accounts, labelled when the names line up", () => {
     const r = resolveTicketAssignees(["Marco", "Gleed", "Visitor"], ["1"], MEMBERS, 9, {}, "Gleed");
-    assert.deepEqual(r.assignees.map((a) => [a.name, a.fallback]), [["Marco Venter", false], ["Gleed", true], ["Visitor", true]]);
+    assert.deepEqual(r.assignees.map((a) => [a.name, a.fallback]), [
+        ["Marco Venter", false],
+        ["Gleed", true],
+        ["Visitor", true],
+    ]);
 });
 test("70%: the configured ClickUp user is tagged, even if that person is not on the list", async () => {
     const w = world();
@@ -441,23 +464,35 @@ function rosterWorld(initial = []) {
 }
 test("roster: copies ClickUp members, then only writes what changed", async () => {
     const r = rosterWorld();
-    r.setMembers([{ id: 1, username: "Marco Venter", email: "m@x.co", avatarUrl: "https://a/1.png" }, { id: 2, username: "Byron Smit" }]);
+    r.setMembers([
+        { id: 1, username: "Marco Venter", email: "m@x.co", avatarUrl: "https://a/1.png" },
+        { id: 2, username: "Byron Smit" },
+    ]);
     assert.equal(await r.run(), 2);
     assert.equal(r.table.get("1").avatarUrl, "https://a/1.png");
     assert.equal(r.table.get("1").isActive, true);
     assert.equal(await r.run(), 0); // nothing changed, nothing written
-    r.setMembers([{ id: 1, username: "Marco V", email: "m@x.co", avatarUrl: "https://a/1.png" }, { id: 2, username: "Byron Smit" }]);
+    r.setMembers([
+        { id: 1, username: "Marco V", email: "m@x.co", avatarUrl: "https://a/1.png" },
+        { id: 2, username: "Byron Smit" },
+    ]);
     assert.equal(await r.run(), 1);
     assert.equal(r.table.get("1").name, "Marco V");
 });
 test("roster: someone removed from ClickUp is switched off, and comes back when re-added", async () => {
     const r = rosterWorld();
-    r.setMembers([{ id: 1, username: "Marco" }, { id: 2, username: "Byron" }]);
+    r.setMembers([
+        { id: 1, username: "Marco" },
+        { id: 2, username: "Byron" },
+    ]);
     await r.run();
     r.setMembers([{ id: 1, username: "Marco" }]);
     await r.run();
     assert.equal(r.table.get("2").isActive, false);
-    r.setMembers([{ id: 1, username: "Marco" }, { id: 2, username: "Byron" }]);
+    r.setMembers([
+        { id: 1, username: "Marco" },
+        { id: 2, username: "Byron" },
+    ]);
     await r.run();
     assert.equal(r.table.get("2").isActive, true);
 });

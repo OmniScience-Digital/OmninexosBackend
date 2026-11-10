@@ -34,7 +34,11 @@ async function syncTicket(deps, row) {
     let hasUpdate = Boolean(row.hasUpdate);
     const task = await deps.clickup.getTask(taskId);
     if (!task) {
-        await deps.repo.updateTicket(row.id, { status: "CLOSED", closedAt: deps.now().toISOString(), lastError: "ClickUp task no longer exists" }, ["lockedUntil"]);
+        await deps.repo.updateTicket(row.id, {
+            status: "CLOSED",
+            closedAt: deps.now().toISOString(),
+            lastError: "ClickUp task no longer exists",
+        }, ["lockedUntil"]);
         return;
     }
     // ---- 1. comments from people
@@ -51,14 +55,19 @@ async function syncTicket(deps, row) {
             break; // keep the cursor here: this comment is retried on the next run
         cursorMs = c.dateMs;
         hasUpdate = true;
-        await deps.repo.updateTicket(row.id, { hasUpdate: true, lastCommentAt: new Date(cursorMs).toISOString() });
+        await deps.repo.updateTicket(row.id, {
+            hasUpdate: true,
+            lastCommentAt: new Date(cursorMs).toISOString(),
+        });
     }
     if (cursorMs > Date.parse(row.lastCommentAt ?? row.createdAt)) {
         await deps.repo.updateTicket(row.id, { lastCommentAt: new Date(cursorMs).toISOString() });
     }
     // ---- 2. finished in ClickUp
     if (DONE_TYPES.has(task.statusType)) {
-        await deps.repo.updateTicket(row.id, { status: "CLOSED", closedAt: deps.now().toISOString() }, ["lockedUntil"]);
+        await deps.repo.updateTicket(row.id, { status: "CLOSED", closedAt: deps.now().toISOString() }, [
+            "lockedUntil",
+        ]);
         return;
     }
     // ---- 3. escalation
@@ -75,7 +84,9 @@ async function syncTicket(deps, row) {
     await deps.repo.updateTicket(row.id, {}, ["lockedUntil"]);
 }
 async function escalate(deps, row, taskName, taskId, step) {
-    const resolved = row.resolvedAssignees ? JSON.parse(row.resolvedAssignees) : [];
+    const resolved = row.resolvedAssignees
+        ? JSON.parse(row.resolvedAssignees)
+        : [];
     const dueAt = new Date(row.dueAt);
     const number = row.ticketNumber ?? row.id;
     const blocks = step === "followUp"
@@ -93,7 +104,9 @@ async function escalate(deps, row, taskName, taskId, step) {
     await deps.repo.updateTicket(row.id, { [flag]: stamp });
     row[flag] = stamp;
     logger.info(`[ticket] ${number} escalation: ${step}`);
-    await deps.sendTelegram(deps.telegramChatId, telegramEscalationMessage(taskName, step, dueAt)).catch(() => false);
+    await deps
+        .sendTelegram(deps.telegramChatId, telegramEscalationMessage(taskName, step, dueAt))
+        .catch(() => false);
 }
 /** Who gets tagged at 70%: the configured ClickUp user, else the list member named Gleed. */
 async function escalationUser(deps) {

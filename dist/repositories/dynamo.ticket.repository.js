@@ -3,7 +3,7 @@
 // Same conventions as dynamo.jobcardflow.repository.ts (raw DynamoDB client, Amplify table and
 // index names, sparse lease column instead of locks).
 import "dotenv/config";
-import { GetItemCommand, QueryCommand, ScanCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, QueryCommand, ScanCommand, UpdateItemCommand, } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { dynamoClient } from "../services/dynamo.service.js";
 import { INDEX, table } from "../helper/ticket/ticket.config.js";
@@ -50,7 +50,10 @@ async function updateById(id, set, remove = [], condition) {
         names[`#r${i}`] = k;
         return `#r${i}`;
     });
-    const expr = [sets.length ? `SET ${sets.join(", ")}` : "", removes.length ? `REMOVE ${removes.join(", ")}` : ""]
+    const expr = [
+        sets.length ? `SET ${sets.join(", ")}` : "",
+        removes.length ? `REMOVE ${removes.join(", ")}` : "",
+    ]
         .filter(Boolean)
         .join(" ");
     if (!expr)
@@ -123,7 +126,11 @@ export async function addBotCommentId(id, commentId) {
         TableName: table("ticket"),
         Key: marshall({ id }),
         UpdateExpression: "SET botCommentIds = list_append(if_not_exists(botCommentIds, :empty), :new), updatedAt = :now",
-        ExpressionAttributeValues: marshall({ ":empty": [], ":new": [commentId], ":now": new Date().toISOString() }),
+        ExpressionAttributeValues: marshall({
+            ":empty": [],
+            ":new": [commentId],
+            ":now": new Date().toISOString(),
+        }),
         ConditionExpression: "attribute_exists(id)",
     }));
 }

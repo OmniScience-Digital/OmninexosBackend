@@ -21,15 +21,23 @@ export const INDEX = {
   ticketsByNumber: 'ticketsByTicketNumber',
 } as const;
 
+const FLOW_VARS = [
+  'TICKET_TABLE',
+  'TICKET_COUNTER_TABLE',
+  'TICKET_CLICKUP_LIST_ID',
+  'TASKING_TELEGRAM_CHAT_ID',
+  'CLICKUP_API_TOKEN',
+];
+const ROSTER_VARS = ['TICKET_MEMBER_TABLE', 'TICKET_CLICKUP_LIST_ID', 'CLICKUP_API_TOKEN'];
+
+/** Names of the variables that are empty or missing, so the log can say exactly what to add. */
+export const missingVars = (names: string[], env: NodeJS.ProcessEnv = process.env): string[] =>
+  names.filter((n) => !env[n]);
+export const missingFlowVars = () => missingVars(FLOW_VARS);
+export const missingRosterVars = () => missingVars(ROSTER_VARS);
+
 /** The flow only runs once everything it needs is configured, so deploying early is harmless. */
-export const ticketFlowEnabled = (): boolean =>
-  Boolean(
-    process.env.TICKET_TABLE &&
-    process.env.TICKET_COUNTER_TABLE &&
-    process.env.TICKET_CLICKUP_LIST_ID &&
-    process.env.TASKING_TELEGRAM_CHAT_ID &&
-    process.env.CLICKUP_API_TOKEN
-  );
+export const ticketFlowEnabled = (): boolean => missingFlowVars().length === 0;
 
 // ---------------------------------------------------------------------------------------------
 // Urgency (the radio group on the form). Values are business minutes. Keep in step with
