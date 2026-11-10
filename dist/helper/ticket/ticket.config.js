@@ -17,7 +17,13 @@ export const INDEX = {
     ticketsByStatus: 'ticketsByStatusAndSubmittedAt',
     ticketsByNumber: 'ticketsByTicketNumber',
 };
-const FLOW_VARS = ['TICKET_TABLE', 'TICKET_COUNTER_TABLE', 'TICKET_CLICKUP_LIST_ID', 'TASKING_TELEGRAM_CHAT_ID', 'CLICKUP_API_TOKEN'];
+const FLOW_VARS = [
+    'TICKET_TABLE',
+    'TICKET_COUNTER_TABLE',
+    'TICKET_CLICKUP_LIST_ID',
+    'TASKING_TELEGRAM_CHAT_ID',
+    'CLICKUP_API_TOKEN',
+];
 const ROSTER_VARS = ['TICKET_MEMBER_TABLE', 'TICKET_CLICKUP_LIST_ID', 'CLICKUP_API_TOKEN'];
 /** Names of the variables that are empty or missing, so the log can say exactly what to add. */
 export const missingVars = (names, env = process.env) => names.filter((n) => !env[n]);
@@ -79,7 +85,9 @@ export function escalationUserId(env = process.env) {
     return env.TICKET_ESCALATION_USER_ID && Number.isFinite(n) ? n : null;
 }
 /** The people list on the form is kept up to date from ClickUp whenever this is configured. */
-export const rosterEnabled = () => Boolean(process.env.TICKET_MEMBER_TABLE && process.env.TICKET_CLICKUP_LIST_ID && process.env.CLICKUP_API_TOKEN);
+export const rosterEnabled = () => Boolean(process.env.TICKET_MEMBER_TABLE &&
+    process.env.TICKET_CLICKUP_LIST_ID &&
+    process.env.CLICKUP_API_TOKEN);
 /** Task numbers are T-0001, T-0002 ... Set TICKET_NUMBER_PAD=5 for T-00001. */
 export const numberPad = () => Number(process.env.TICKET_NUMBER_PAD) || 4;
 /** Every comment the system posts ends with this, so it can never be mistaken for a user update. */

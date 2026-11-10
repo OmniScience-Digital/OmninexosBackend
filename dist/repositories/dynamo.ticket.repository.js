@@ -1,4 +1,4 @@
-// src/repositories/dynamo.ticket.repository.ts  (NEW FILE)
+// src/repositories/dynamo.ticket.repository.ts 
 // TICKETING: all DynamoDB access for the Ticket / TicketCounter tables.
 // Same conventions as dynamo.jobcardflow.repository.ts (raw DynamoDB client, Amplify table and
 // index names, sparse lease column instead of locks).
@@ -151,8 +151,10 @@ export async function putMember(person) {
     await dynamoClient.send(new UpdateItemCommand({
         TableName: table("member"),
         Key: marshall({ id: person.id }),
-        UpdateExpression: "SET #n = :n, email = :e, avatarUrl = :av, isActive = :a, updatedAt = :now, createdAt = if_not_exists(createdAt, :now), __typename = :t",
-        ExpressionAttributeNames: { "#n": "name" },
+        UpdateExpression: "SET #n = :n, email = :e, avatarUrl = :av, isActive = :a, updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #tn = :t",
+        // DynamoDB rejects attribute names that start with an underscore inside an expression, so
+        // __typename must go through a #placeholder (a bare __typename is a ValidationException).
+        ExpressionAttributeNames: { "#n": "name", "#tn": "__typename" },
         ExpressionAttributeValues: marshall({
             ":n": person.name,
             ":e": person.email ?? null,
