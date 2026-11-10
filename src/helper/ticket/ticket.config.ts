@@ -5,6 +5,7 @@
 export const TABLE_ENV = {
   ticket: 'TICKET_TABLE', // the Amplify "Ticket" table
   counter: 'TICKET_COUNTER_TABLE', // the Amplify "TicketCounter" table
+  member: 'TICKET_MEMBER_TABLE', // the Amplify "ClickUpMember" table (people shown on the form)
 } as const;
 export type TableKey = keyof typeof TABLE_ENV;
 
@@ -87,8 +88,25 @@ export function getBusinessCalendar(env: NodeJS.ProcessEnv = process.env): Busin
 // ---------------------------------------------------------------------------------------------
 export const ESCALATION = { followUpAt: 0.5, gleedAt: 0.7 } as const;
 
-/** Gleed is the form's owner: the fallback assignee and the person tagged at 70%. */
+/**
+ * Who is tagged in ClickUp at 70% (and who gets a task when the person picked has left ClickUp).
+ * Set TICKET_ESCALATION_USER_ID to that person's ClickUp user id. If it is not set, the ClickUp list
+ * member named TICKET_FALLBACK_NAME (default "Gleed") is used. If neither exists in ClickUp, nobody
+ * can be tagged: the comment is still posted, untagged, and a warning is logged.
+ */
 export const GLEED_NAME = process.env.TICKET_FALLBACK_NAME || 'Gleed';
+export function escalationUserId(env: NodeJS.ProcessEnv = process.env): number | null {
+  const n = Number(env.TICKET_ESCALATION_USER_ID);
+  return env.TICKET_ESCALATION_USER_ID && Number.isFinite(n) ? n : null;
+}
+
+/** The people list on the form is kept up to date from ClickUp whenever this is configured. */
+export const rosterEnabled = (): boolean =>
+  Boolean(
+    process.env.TICKET_MEMBER_TABLE &&
+    process.env.TICKET_CLICKUP_LIST_ID &&
+    process.env.CLICKUP_API_TOKEN
+  );
 
 /** Task numbers are T-0001, T-0002 ... Set TICKET_NUMBER_PAD=5 for T-00001. */
 export const numberPad = (): number => Number(process.env.TICKET_NUMBER_PAD) || 4;

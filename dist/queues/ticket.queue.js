@@ -1,4 +1,4 @@
-// src/queues/ticket.queue.ts 
+// src/queues/ticket.queue.ts
 // TICKETING: two repeating jobs, on separate queues so a slow ClickUp sync never delays intake.
 import { createQueue } from "../bull/bull.redis.js";
 export const ticketIntakeQueue = createQueue("ticket-intake");

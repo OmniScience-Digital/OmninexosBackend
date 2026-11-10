@@ -25,7 +25,7 @@ test("description lists assignees, due date and outcome, and flags fallbacks", (
         dueAt: sast("2026-11-10T13:00:00"),
         requiredOutcome: " Pump running ",
     });
-    assert.equal(text, "Assignees: Marco, Byron (not on ClickUp, assigned to Gleed)\nDue Date: Tue 10 Nov 2026, 13:00 SAST\nRequired Outcome: Pump running");
+    assert.equal(text, "Assignees: Marco, Byron (not on ClickUp)\nDue Date: Tue 10 Nov 2026, 13:00 SAST\nRequired Outcome: Pump running");
 });
 test("Telegram text escapes legacy Markdown characters", () => {
     assert.equal(escapeTelegram("pump_2 *urgent* [a] `x`"), "pump\\_2 \\*urgent\\* \\[a] \\`x\\`");
@@ -34,12 +34,12 @@ test("Telegram text escapes legacy Markdown characters", () => {
 test("very long updates are clipped under the Telegram limit", () => {
     assert.ok(telegramUpdateMessage("T-0001, x", "A", "y".repeat(10000)).length < 4096);
 });
-test("escalation notice names the stage; the 70% one mentions Gleed", () => {
+test("escalation notice names the stage and never mentions Gleed or tagging", () => {
     const due = sast("2026-11-10T13:00:00");
     assert.match(telegramEscalationMessage("T-0001, x", "followUp", due), /50%/);
     const g = telegramEscalationMessage("T-0001, x", "gleed", due);
     assert.match(g, /70%/);
-    assert.match(g, /Gleed/);
+    assert.doesNotMatch(g, /Gleed|tagged/); // the group is never told who was tagged
 });
 test("ClickUp comments tag the right people and carry the bot signature", () => {
     const due = sast("2026-11-10T13:00:00");

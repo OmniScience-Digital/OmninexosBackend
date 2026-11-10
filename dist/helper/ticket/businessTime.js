@@ -1,4 +1,4 @@
-// src/helper/ticket/businessTime.ts 
+// src/helper/ticket/businessTime.ts
 // TICKETING: pure business-hours maths. No I/O, no clock reads: callers pass the time in.
 //
 // Business day = startMinute..endMinute (06:00..17:00 by default), every day of the week.

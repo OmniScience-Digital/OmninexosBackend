@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { processSubmittedTickets, type IntakeDeps, type TicketRepo } from './ticket.intake.service';
 import { syncOpenTickets, type SyncDeps } from './ticket.sync.service';
 import type { ClickUpComment, ClickUpMember, TicketClickUp } from './ticket.clickup.service';
-import { resolveAssignees } from '../helper/ticket/ticket.assignees';
+import { resolveAssignees, resolveTicketAssignees } from '../helper/ticket/ticket.assignees';
+import { refreshRoster } from './ticket.roster.service';
 import { BOT_SIGNATURE, MAX_ATTEMPTS, getBusinessCalendar } from '../helper/ticket/ticket.config';
 import type { CommentBlock } from '../helper/ticket/ticket.format';
 
@@ -67,10 +68,11 @@ function world(start = '2026-11-09T08:00:00') {
   const posted: { taskId: string; blocks: CommentBlock[] }[] = [];
   const failures = { createTask: 0 };
   let nextId = 100;
+  let members: ClickUpMember[] = MEMBERS;
 
   const clickup: TicketClickUp = {
     async getListMembers() {
-      return MEMBERS;
+      return members;
     },
     async createTask(input) {
       if (failures.createTask > 0) {
@@ -115,6 +117,7 @@ function world(start = '2026-11-09T08:00:00') {
     now: () => clock,
     cal,
     gleedName: 'Gleed',
+    escalationUserId: null as number | null,
     telegramChatId: 'chat1',
     sendTelegram: async (_c: string, text: string) => {
       if (!telegramOk) return false;
@@ -159,6 +162,7 @@ function world(start = '2026-11-09T08:00:00') {
     intake,
     sync,
     submit,
+    setMembers: (m: ClickUpMember[]) => (members = m),
     setClock: (iso: string) => (clock = sast(iso)),
     advance: (ms: number) => (clock = new Date(clock.getTime() + ms)),
     setTelegramOk: (ok: boolean) => (telegramOk = ok),
@@ -222,7 +226,7 @@ test('intake: a name that is not on ClickUp goes to Gleed', async () => {
   w.submit({ assignees: ['Shaughn'] });
   await processSubmittedTickets(w.intake);
   assert.deepEqual(w.created[0].assigneeIds, [9]);
-  assert.match(w.created[0].description, /Shaughn \(not on ClickUp, assigned to Gleed\)/);
+  assert.match(w.created[0].description, /Shaughn \(not on ClickUp\)/);
 });
 
 test('intake: ClickUp down -> retried later, same number, one task, back-off respected', async () => {
@@ -356,7 +360,8 @@ test('sync: 4H task with no update -> follow-up at 50% tagging the assignee, Gle
     w.posted[1].blocks.filter((b) => 'type' in b),
     [{ type: 'tag', user: { id: 9 } }]
   ); // Gleed
-  assert.match(w.telegram[w.telegram.length - 1], /70%.*Gleed/s);
+  assert.match(w.telegram[w.telegram.length - 1], /70%/);
+  assert.doesNotMatch(w.telegram[w.telegram.length - 1], /Gleed|tagged/);
 
   w.setClock('2026-11-09T11:30:00');
   await syncOpenTickets(w.sync);
@@ -434,4 +439,140 @@ test('assignees: an explicit id map pins a name, and Gleed missing is tolerated'
   const none = resolveAssignees(['Shaughn'], [], {}, 'Gleed');
   assert.equal(none.assignees[0].clickupUserId, null);
   assert.ok(none.warnings.some((x) => x.includes('Fallback')));
+});
+
+// ------------------------------------------------------------------ people picked from ClickUp (by id)
+test('intake: ClickUp people go by id; someone with no ClickUp account (Gleed) goes to the fallback user', async () => {
+  const w = world();
+  w.submit({ assignees: ['Marco', 'Gleed'], assigneeClickupIds: ['1'] });
+  await processSubmittedTickets(w.intake);
+  assert.deepEqual(w.created[0].assigneeIds, [1, 9]); // 9 = fallback user (the member named Gleed here)
+  assert.match(w.created[0].description, /^Assignees: Marco Venter, Gleed \(not on ClickUp\)/);
+});
+
+test('intake: an alias must never cause a wrong assignment (counts decide, not name guessing)', async () => {
+  const w = world();
+  // The picker shows the standard name "Conraad" for ClickUp user 2 ("Byron Smit" here stands in for
+  // a member whose ClickUp name differs from the standard name). Names 1, ids 1: nobody lacks an account.
+  w.submit({ assignees: ['Conraad'], assigneeClickupIds: ['2'] });
+  await processSubmittedTickets(w.intake);
+  assert.deepEqual(w.created[0].assigneeIds, [2]);
+});
+
+test('intake: a picked ClickUp user who has since left ClickUp goes to the fallback user', async () => {
+  const w = world();
+  w.submit({ assignees: ['Ghost'], assigneeClickupIds: ['555'] });
+  await processSubmittedTickets(w.intake);
+  assert.deepEqual(w.created[0].assigneeIds, [9]);
+});
+
+test('intake: tickets saved without ids (older ones) are still resolved by name', async () => {
+  const w = world();
+  w.submit({ assignees: ['Byron'] });
+  await processSubmittedTickets(w.intake);
+  assert.deepEqual(w.created[0].assigneeIds, [2]);
+});
+
+test('resolveTicketAssignees: nobody picked still gets an owner', () => {
+  const r = resolveTicketAssignees([], [], MEMBERS, 9, {}, 'Gleed');
+  assert.equal(r.assignees[0].clickupUserId, 9);
+});
+
+test('resolveTicketAssignees: two without accounts, labelled when the names line up', () => {
+  const r = resolveTicketAssignees(['Marco', 'Gleed', 'Visitor'], ['1'], MEMBERS, 9, {}, 'Gleed');
+  assert.deepEqual(
+    r.assignees.map((a) => [a.name, a.fallback]),
+    [
+      ['Marco Venter', false],
+      ['Gleed', true],
+      ['Visitor', true],
+    ]
+  );
+});
+
+test('70%: the configured ClickUp user is tagged, even if that person is not on the list', async () => {
+  const w = world();
+  await openTicket(w);
+  w.sync.escalationUserId = 77;
+  w.setClock('2026-11-09T11:30:00');
+  await syncOpenTickets(w.sync);
+  const gleedStep = w.posted[w.posted.length - 1];
+  assert.deepEqual(
+    gleedStep.blocks.filter((b) => 'type' in b),
+    [{ type: 'tag', user: { id: 77 } }]
+  );
+});
+
+test('70%: if nobody can be tagged the comment still goes out untagged and Telegram does not claim a tag', async () => {
+  const w = world();
+  w.setMembers([MEMBERS[0], MEMBERS[1]]); // no Gleed in ClickUp
+  await openTicket(w);
+  w.setClock('2026-11-09T11:30:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.posted.length, 2);
+  assert.equal(w.posted[1].blocks.filter((b) => 'type' in b).length, 0);
+  assert.ok(w.telegram.every((t) => !/tagged|Gleed/.test(t)));
+});
+
+// ------------------------------------------------------------------ people list kept in step with ClickUp
+function rosterWorld(initial: Record<string, any>[] = []) {
+  const table = new Map(initial.map((r) => [r.id, r]));
+  let members: ClickUpMember[] = [];
+  return {
+    table,
+    setMembers: (m: ClickUpMember[]) => (members = m),
+    run: () =>
+      refreshRoster({
+        clickup: { getListMembers: async () => members },
+        repo: {
+          listMembers: async () => [...table.values()],
+          putMember: async (p) => void table.set(p.id, { ...p }),
+        },
+      }),
+  };
+}
+
+test('roster: copies ClickUp members, then only writes what changed', async () => {
+  const r = rosterWorld();
+  r.setMembers([
+    { id: 1, username: 'Marco Venter', email: 'm@x.co', avatarUrl: 'https://a/1.png' },
+    { id: 2, username: 'Byron Smit' },
+  ]);
+  assert.equal(await r.run(), 2);
+  assert.equal(r.table.get('1')!.avatarUrl, 'https://a/1.png');
+  assert.equal(r.table.get('1')!.isActive, true);
+  assert.equal(await r.run(), 0); // nothing changed, nothing written
+  r.setMembers([
+    { id: 1, username: 'Marco V', email: 'm@x.co', avatarUrl: 'https://a/1.png' },
+    { id: 2, username: 'Byron Smit' },
+  ]);
+  assert.equal(await r.run(), 1);
+  assert.equal(r.table.get('1')!.name, 'Marco V');
+});
+
+test('roster: someone removed from ClickUp is switched off, and comes back when re-added', async () => {
+  const r = rosterWorld();
+  r.setMembers([
+    { id: 1, username: 'Marco' },
+    { id: 2, username: 'Byron' },
+  ]);
+  await r.run();
+  r.setMembers([{ id: 1, username: 'Marco' }]);
+  await r.run();
+  assert.equal(r.table.get('2')!.isActive, false);
+  r.setMembers([
+    { id: 1, username: 'Marco' },
+    { id: 2, username: 'Byron' },
+  ]);
+  await r.run();
+  assert.equal(r.table.get('2')!.isActive, true);
+});
+
+test('roster: an empty ClickUp answer never switches everyone off', async () => {
+  const r = rosterWorld();
+  r.setMembers([{ id: 1, username: 'Marco' }]);
+  await r.run();
+  r.setMembers([]);
+  assert.equal(await r.run(), 0);
+  assert.equal(r.table.get('1')!.isActive, true);
 });

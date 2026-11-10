@@ -11,6 +11,7 @@ export interface ClickUpMember {
   id: number;
   username: string;
   email?: string;
+  avatarUrl?: string;
 }
 export interface ClickUpComment {
   id: string;
@@ -64,6 +65,7 @@ export const clickUpTicketApi: TicketClickUp = {
       id: Number(m.id),
       username: String(m.username ?? ''),
       email: m.email ? String(m.email) : undefined,
+      avatarUrl: m.profilePicture ? String(m.profilePicture) : undefined,
     }));
     membersCache = { at: Date.now(), list };
     return list;

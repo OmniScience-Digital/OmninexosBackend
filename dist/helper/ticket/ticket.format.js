@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.format.ts  
+// src/helper/ticket/ticket.format.ts 
 // TICKETING: pure text builders for ClickUp and Telegram.
 import { DateTime } from "luxon";
 import { BOT_SIGNATURE, MAX_TELEGRAM_TEXT } from "./ticket.config.js";
@@ -9,7 +9,7 @@ export const formatDue = (d, zone = "Africa/Johannesburg") => `${DateTime.fromJS
 /** ClickUp task description (Assignees / Due Date / Required Outcome, as on the spreadsheet). */
 export function buildDescription(p) {
     const who = p.assignees
-        .map((a) => (a.fallback ? `${a.name} (not on ClickUp, assigned to Gleed)` : a.name))
+        .map((a) => (a.fallback ? `${a.name} (not on ClickUp)` : a.name))
         .join(", ");
     return [`Assignees: ${who}`, `Due Date: ${formatDue(p.dueAt)}`, `Required Outcome: ${p.requiredOutcome.trim()}`].join("\n");
 }
@@ -26,8 +26,7 @@ export function telegramUpdateMessage(taskName, author, text) {
 /** Posted to the group when a task still has no update at 50% / 70%. */
 export function telegramEscalationMessage(taskName, step, dueAt) {
     const pct = step === "followUp" ? "50%" : "70%";
-    const extra = step === "gleed" ? " Gleed has been tagged on the task." : "";
-    return clip(`${escapeTelegram(taskName)}\nNo feedback received on this task yet (${pct} of the time used, due ${formatDue(dueAt)}).${extra}`);
+    return clip(`${escapeTelegram(taskName)}\nNo feedback received on this task yet (${pct} of the time used, due ${formatDue(dueAt)}).`);
 }
 export const telegramCreatedMessage = (taskName, assignees, dueAt) => clip(`${escapeTelegram(taskName)}\nTask created for ${escapeTelegram(assignees.join(", "))}, due ${formatDue(dueAt)}.`);
 const tag = (id) => ({ type: "tag", user: { id } });

@@ -26,7 +26,7 @@ export function buildDescription(p: {
   requiredOutcome: string;
 }): string {
   const who = p.assignees
-    .map((a) => (a.fallback ? `${a.name} (not on ClickUp, assigned to Gleed)` : a.name))
+    .map((a) => (a.fallback ? `${a.name} (not on ClickUp)` : a.name))
     .join(', ');
   return [
     `Assignees: ${who}`,
@@ -60,9 +60,8 @@ export function telegramEscalationMessage(
   dueAt: Date
 ): string {
   const pct = step === 'followUp' ? '50%' : '70%';
-  const extra = step === 'gleed' ? ' Gleed has been tagged on the task.' : '';
   return clip(
-    `${escapeTelegram(taskName)}\nNo feedback received on this task yet (${pct} of the time used, due ${formatDue(dueAt)}).${extra}`
+    `${escapeTelegram(taskName)}\nNo feedback received on this task yet (${pct} of the time used, due ${formatDue(dueAt)}).`
   );
 }
 

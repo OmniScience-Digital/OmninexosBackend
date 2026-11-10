@@ -1,4 +1,4 @@
-// src/services/ticket.clickup.service.ts 
+// src/services/ticket.clickup.service.ts  
 // TICKETING: the ClickUp calls the ticket flow needs. Goes through clickupFetch so it shares the
 // backend's per-minute ClickUp budget and 429 retry handling.
 import "dotenv/config";
@@ -28,6 +28,7 @@ export const clickUpTicketApi = {
             id: Number(m.id),
             username: String(m.username ?? ""),
             email: m.email ? String(m.email) : undefined,
+            avatarUrl: m.profilePicture ? String(m.profilePicture) : undefined,
         }));
         membersCache = { at: Date.now(), list };
         return list;

@@ -1,4 +1,4 @@
-// src/helper/ticket/escalation.ts 
+// src/helper/ticket/escalation.ts
 // TICKETING: decides which escalations are due for one ticket. Pure.
 //
 // Rules (from the spreadsheet):

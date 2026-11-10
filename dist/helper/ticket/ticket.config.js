@@ -1,9 +1,10 @@
-// src/helper/ticket/ticket.config.ts 
+// src/helper/ticket/ticket.config.ts  
 // TICKETING: every setting for the task / ticket system in one place.
 // See TICKETING.md in the project root for the environment variables and set-up steps.
 export const TABLE_ENV = {
     ticket: 'TICKET_TABLE', // the Amplify "Ticket" table
     counter: 'TICKET_COUNTER_TABLE', // the Amplify "TicketCounter" table
+    member: 'TICKET_MEMBER_TABLE', // the Amplify "ClickUpMember" table (people shown on the form)
 };
 export function table(key) {
     const name = process.env[TABLE_ENV[key]];
@@ -64,8 +65,19 @@ export function getBusinessCalendar(env = process.env) {
 //   70%  -> tag Gleed
 // ---------------------------------------------------------------------------------------------
 export const ESCALATION = { followUpAt: 0.5, gleedAt: 0.7 };
-/** Gleed is the form's owner: the fallback assignee and the person tagged at 70%. */
+/**
+ * Who is tagged in ClickUp at 70% (and who gets a task when the person picked has left ClickUp).
+ * Set TICKET_ESCALATION_USER_ID to that person's ClickUp user id. If it is not set, the ClickUp list
+ * member named TICKET_FALLBACK_NAME (default "Gleed") is used. If neither exists in ClickUp, nobody
+ * can be tagged: the comment is still posted, untagged, and a warning is logged.
+ */
 export const GLEED_NAME = process.env.TICKET_FALLBACK_NAME || 'Gleed';
+export function escalationUserId(env = process.env) {
+    const n = Number(env.TICKET_ESCALATION_USER_ID);
+    return env.TICKET_ESCALATION_USER_ID && Number.isFinite(n) ? n : null;
+}
+/** The people list on the form is kept up to date from ClickUp whenever this is configured. */
+export const rosterEnabled = () => Boolean(process.env.TICKET_MEMBER_TABLE && process.env.TICKET_CLICKUP_LIST_ID && process.env.CLICKUP_API_TOKEN);
 /** Task numbers are T-0001, T-0002 ... Set TICKET_NUMBER_PAD=5 for T-00001. */
 export const numberPad = () => Number(process.env.TICKET_NUMBER_PAD) || 4;
 /** Every comment the system posts ends with this, so it can never be mistaken for a user update. */

@@ -64,7 +64,9 @@ test("addBusinessMinutes and businessMinutesBetween agree", () => {
     }
 });
 test("business hours can be changed through the environment", () => {
-    const late = getBusinessCalendar({ TICKET_BUSINESS_END: "19:00" });
+    const late = getBusinessCalendar({
+        TICKET_BUSINESS_END: "19:00",
+    });
     assert.equal(show(addBusinessMinutes(sast("2026-11-09T17:00:00"), 60, late)), "09/11/2026, 18:00");
     assert.throws(() => getBusinessCalendar({ TICKET_BUSINESS_END: "05:00" }));
     assert.throws(() => parseClock("9am"));

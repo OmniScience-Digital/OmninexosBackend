@@ -1,4 +1,4 @@
-// src/services/ticket.sync.service.ts
+// src/services/ticket.sync.service.ts  (NEW FILE)
 // TICKETING: the 5 minute run over every OPEN ticket.
 //   1. New comments from people on the ClickUp task are forwarded to the Telegram group and count
 //      as an update. Comments the system posted itself are ignored.
@@ -8,7 +8,7 @@ import logger from '../utils/logger';
 import type { TicketClickUp } from './ticket.clickup.service';
 import type { TicketRepo } from './ticket.intake.service';
 import { dueEscalations } from '../helper/ticket/escalation';
-import { matchMember } from '../helper/ticket/ticket.assignees';
+import { escalationTarget } from '../helper/ticket/ticket.assignees';
 import {
   buildTaskName,
   followUpComment,
@@ -27,6 +27,7 @@ export interface SyncDeps {
   now: () => Date;
   cal: BusinessCalendar;
   gleedName: string;
+  escalationUserId: number | null;
   telegramChatId: string;
   sendTelegram: (chatId: string, text: string) => Promise<boolean>;
 }
@@ -142,7 +143,12 @@ async function escalate(
           [...new Set(resolved.map((a) => a.clickupUserId).filter((x): x is number => x !== null))],
           dueAt
         )
-      : gleedComment(number, await gleedId(deps), dueAt);
+      : gleedComment(number, await escalationUser(deps), dueAt);
+  if (step === 'gleed' && !blocks.some((b) => 'type' in b)) {
+    logger.warn(
+      `[ticket] ${number}: nobody could be tagged at 70%. Set TICKET_ESCALATION_USER_ID to a ClickUp user id`
+    );
+  }
 
   const posted = await deps.clickup.postComment(taskId, blocks);
   // Record before anything else so the comment can never be mistaken for a person's update.
@@ -158,8 +164,11 @@ async function escalate(
     .catch(() => false);
 }
 
-/** Gleed's ClickUp id, looked up on the list (cached by the ClickUp client). */
-async function gleedId(deps: SyncDeps): Promise<number | null> {
-  const match = matchMember(deps.gleedName, await deps.clickup.getListMembers());
-  return match.member ? match.member.id : null;
+/** Who gets tagged at 70%: the configured ClickUp user, else the list member named Gleed. */
+async function escalationUser(deps: SyncDeps): Promise<number | null> {
+  return escalationTarget(
+    deps.escalationUserId,
+    await deps.clickup.getListMembers(),
+    deps.gleedName
+  );
 }

@@ -1,9 +1,9 @@
-// src/repositories/dynamo.ticket.repository.ts 
+// src/repositories/dynamo.ticket.repository.ts  (NEW FILE)
 // TICKETING: all DynamoDB access for the Ticket / TicketCounter tables.
 // Same conventions as dynamo.jobcardflow.repository.ts (raw DynamoDB client, Amplify table and
 // index names, sparse lease column instead of locks).
 import "dotenv/config";
-import { GetItemCommand, QueryCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, QueryCommand, ScanCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { dynamoClient } from "../services/dynamo.service.js";
 import { INDEX, table } from "../helper/ticket/ticket.config.js";
@@ -125,5 +125,34 @@ export async function addBotCommentId(id, commentId) {
         UpdateExpression: "SET botCommentIds = list_append(if_not_exists(botCommentIds, :empty), :new), updatedAt = :now",
         ExpressionAttributeValues: marshall({ ":empty": [], ":new": [commentId], ":now": new Date().toISOString() }),
         ConditionExpression: "attribute_exists(id)",
+    }));
+}
+/** Everyone in the ClickUpMember table. A handful of rows, so a Scan is fine here (no index needed). */
+export async function listMembers() {
+    const rows = [];
+    let startKey;
+    do {
+        const res = await dynamoClient.send(new ScanCommand({ TableName: table("member"), ExclusiveStartKey: startKey }));
+        rows.push(...(res.Items ?? []).map((i) => unmarshall(i)));
+        startKey = res.LastEvaluatedKey;
+    } while (startKey);
+    return rows;
+}
+/** Adds or updates one person (id = ClickUp user id). Written the way Amplify writes its own rows. */
+export async function putMember(person) {
+    const now = new Date().toISOString();
+    await dynamoClient.send(new UpdateItemCommand({
+        TableName: table("member"),
+        Key: marshall({ id: person.id }),
+        UpdateExpression: "SET #n = :n, email = :e, avatarUrl = :av, isActive = :a, updatedAt = :now, createdAt = if_not_exists(createdAt, :now), __typename = :t",
+        ExpressionAttributeNames: { "#n": "name" },
+        ExpressionAttributeValues: marshall({
+            ":n": person.name,
+            ":e": person.email ?? null,
+            ":av": person.avatarUrl ?? null,
+            ":a": person.isActive,
+            ":now": now,
+            ":t": "ClickUpMember",
+        }),
     }));
 }

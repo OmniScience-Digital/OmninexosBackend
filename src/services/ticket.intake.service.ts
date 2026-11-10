@@ -6,7 +6,11 @@ import logger from '../utils/logger';
 import type * as Repo from '../repositories/dynamo.ticket.repository';
 import type { TicketClickUp } from './ticket.clickup.service';
 import { addBusinessMinutes } from '../helper/ticket/businessTime';
-import { assigneeIds, resolveAssignees } from '../helper/ticket/ticket.assignees';
+import {
+  assigneeIds,
+  escalationTarget,
+  resolveTicketAssignees,
+} from '../helper/ticket/ticket.assignees';
 import {
   buildDescription,
   buildTaskName,
@@ -41,6 +45,7 @@ export interface IntakeDeps {
   cal: BusinessCalendar;
   numberPad: number;
   gleedName: string;
+  escalationUserId: number | null;
   overrides: Record<string, number>;
   telegramChatId: string;
   notifyOnCreate: boolean;
@@ -102,7 +107,15 @@ async function processTicket(deps: IntakeDeps, row: Row): Promise<boolean> {
   } else {
     dueAt = addBusinessMinutes(submittedAt, urgencyMinutes, deps.cal);
     const members = await deps.clickup.getListMembers();
-    const r = resolveAssignees(row.assignees ?? [], members, deps.overrides, deps.gleedName);
+    const fallbackId = escalationTarget(deps.escalationUserId, members, deps.gleedName);
+    const r = resolveTicketAssignees(
+      row.assignees ?? [],
+      row.assigneeClickupIds ?? [],
+      members,
+      fallbackId,
+      deps.overrides,
+      deps.gleedName
+    );
     r.warnings.forEach((w) => logger.warn(`[ticket] ${ticketNumber}: ${w}`));
     resolved = r.assignees;
     await deps.repo.updateTicket(row.id, {

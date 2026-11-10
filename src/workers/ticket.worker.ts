@@ -8,12 +8,15 @@ import { getTelegramService } from '../services/telegram.service';
 import * as repo from '../repositories/dynamo.ticket.repository';
 import { processSubmittedTickets, type IntakeDeps } from '../services/ticket.intake.service';
 import { syncOpenTickets, type SyncDeps } from '../services/ticket.sync.service';
+import { refreshRoster } from '../services/ticket.roster.service';
 import {
   GLEED_NAME,
   assigneeOverrides,
+  escalationUserId,
   getBusinessCalendar,
   notifyOnCreate,
   numberPad,
+  rosterEnabled,
   ticketFlowEnabled,
 } from '../helper/ticket/ticket.config';
 
@@ -23,6 +26,7 @@ const common = () => ({
   now: () => new Date(),
   cal: getBusinessCalendar(),
   gleedName: GLEED_NAME,
+  escalationUserId: escalationUserId(),
   telegramChatId: process.env.TASKING_TELEGRAM_CHAT_ID!,
   sendTelegram: (chatId: string, text: string) => getTelegramService().sendMessage(text, chatId),
 });
@@ -59,6 +63,16 @@ export const ticketIntakeWorker = createWorker('ticket-intake', async () => {
 });
 
 export const ticketSyncWorker = createWorker('ticket-sync', async () => {
+  // Keep the form's people list in step with ClickUp (runs even before Telegram is configured).
+  if (rosterEnabled()) {
+    try {
+      const changed = await refreshRoster({ repo, clickup: clickUpTicketApi });
+      if (changed > 0)
+        logger.info(`[ticket] people list updated from ClickUp (${changed} change(s))`);
+    } catch (err) {
+      logger.error('❌ Ticket people refresh failed:', err);
+    }
+  }
   if (!enabled()) return;
   try {
     await syncOpenTickets(syncDeps());

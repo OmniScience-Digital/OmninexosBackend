@@ -1,10 +1,10 @@
-// src/services/ticket.intake.service.ts
+// src/services/ticket.intake.service.ts  
 // TICKETING: picks up SUBMITTED tickets (saved by the web form) and turns each into a numbered
 // ClickUp task. Safe to re-run: the number is allocated once, computed values are saved before the
 // ClickUp call, and a ticket that already has a ClickUp task id never creates a second task.
 import logger from "../utils/logger.js";
 import { addBusinessMinutes } from "../helper/ticket/businessTime.js";
-import { assigneeIds, resolveAssignees } from "../helper/ticket/ticket.assignees.js";
+import { assigneeIds, escalationTarget, resolveTicketAssignees } from "../helper/ticket/ticket.assignees.js";
 import { buildDescription, buildTaskName, formatTicketNumber, telegramCreatedMessage, } from "../helper/ticket/ticket.format.js";
 import { INTAKE_BATCH, INTAKE_LEASE_MS, MAX_ATTEMPTS, URGENCY_MINUTES, isKnownUrgency, } from "../helper/ticket/ticket.config.js";
 const backoffMs = (attempts) => Math.min(15000 * 2 ** attempts, 10 * 60000);
@@ -59,7 +59,8 @@ async function processTicket(deps, row) {
     else {
         dueAt = addBusinessMinutes(submittedAt, urgencyMinutes, deps.cal);
         const members = await deps.clickup.getListMembers();
-        const r = resolveAssignees(row.assignees ?? [], members, deps.overrides, deps.gleedName);
+        const fallbackId = escalationTarget(deps.escalationUserId, members, deps.gleedName);
+        const r = resolveTicketAssignees(row.assignees ?? [], row.assigneeClickupIds ?? [], members, fallbackId, deps.overrides, deps.gleedName);
         r.warnings.forEach((w) => logger.warn(`[ticket] ${ticketNumber}: ${w}`));
         resolved = r.assignees;
         await deps.repo.updateTicket(row.id, {
