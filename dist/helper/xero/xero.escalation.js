@@ -8,7 +8,10 @@ import { clickupFetch } from "../../services/clickup.throttle.js";
 import { xeroEscalationAssignees, xeroTagComment } from "./xero.assignees.js";
 import { createQuoteSyncEscalator } from "./xero.escalator.js";
 const API = "https://api.clickup.com/api/v2";
-const headers = () => ({ Authorization: process.env.CLICKUP_API_TOKEN, "Content-Type": "application/json" });
+const headers = () => ({
+    Authorization: process.env.CLICKUP_API_TOKEN,
+    "Content-Type": "application/json",
+});
 /**
  * Creates the task in the Server_Escalations list, then tags the xero_excalation_a / _b users in a
  * comment on it (ClickUp can only @mention people in a comment, not when a task is created).

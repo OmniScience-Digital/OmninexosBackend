@@ -9,7 +9,8 @@ import { processSubmittedTickets } from "../services/ticket.intake.service.js";
 import { syncOpenTickets } from "../services/ticket.sync.service.js";
 import { ticketCommonDeps, ticketSyncDeps } from "../services/ticket.deps.js";
 import { refreshRoster } from "../services/ticket.roster.service.js";
-import { assigneeOverrides, missingFlowVars, missingRosterVars, notifyOnCreate, numberPad, rosterEnabled, ticketFlowEnabled, } from "../helper/ticket/ticket.config.js";
+import { syncWindowOpen } from "../helper/ticket/cronHours.js";
+import { assigneeOverrides, getBusinessCalendar, missingFlowVars, missingRosterVars, notifyOnCreate, numberPad, rosterEnabled, ticketFlowEnabled, } from "../helper/ticket/ticket.config.js";
 const intakeDeps = () => ({
     ...ticketCommonDeps(),
     numberPad: numberPad(),
@@ -60,6 +61,10 @@ export const ticketSyncWorker = createWorker("ticket-sync", async () => {
         }
     }
     if (!enabled())
+        return;
+    // Reminders, follow-ups and forwarding replies only run 06:00 to 17:00. Replies posted overnight are
+    // forwarded on the first run of the morning (they are read from ClickUp by time, so none are lost).
+    if (!syncWindowOpen(new Date(), getBusinessCalendar()))
         return;
     try {
         await syncOpenTickets(ticketSyncDeps());

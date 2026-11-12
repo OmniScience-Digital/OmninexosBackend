@@ -5,9 +5,9 @@
 //   2. A finished ClickUp task closes the ticket.
 //   3. A ticket with no update gets the 50% follow-up and the 70% Gleed tag (see escalation.ts).
 import logger from "../utils/logger.js";
-import { asapReportDue, dueEscalations } from "../helper/ticket/escalation.js";
+import { dueEscalations, reminderDue } from "../helper/ticket/escalation.js";
 import { escalationTarget } from "../helper/ticket/ticket.assignees.js";
-import { buildTaskName, followUpComment, gleedComment, isBotText, telegramAsapMessage, telegramEscalationMessage, telegramUpdateMessage, } from "../helper/ticket/ticket.format.js";
+import { buildTaskName, followUpComment, gleedComment, isBotText, telegramEscalationMessage, telegramOverdueDigest, telegramUpdateMessage, } from "../helper/ticket/ticket.format.js";
 import { SYNC_LEASE_MS } from "../helper/ticket/ticket.config.js";
 const DONE_TYPES = new Set(["done", "closed"]);
 /** Syncs one ticket; a failure is logged and the lease released so the next run can retry. */
@@ -24,6 +24,32 @@ async function syncTicketSafely(deps, row) {
 export async function syncOpenTickets(deps) {
     for (const row of await deps.repo.listTicketsByStatus("OPEN"))
         await syncTicketSafely(deps, row);
+    await sendOverdueReminder(deps);
+}
+/**
+ * The hourly reminder: every open task past its due date, in one Telegram message. Runs after the
+ * tickets are synced, so a task closed a moment ago is not listed. Tickets are only marked as
+ * reminded once their message was sent, so a failed send is retried on the next run.
+ */
+async function sendOverdueReminder(deps) {
+    const now = deps.now();
+    const due = (await deps.repo.listTicketsByStatus("OPEN")).filter((r) => reminderDue({
+        urgency: r.urgency,
+        createdAt: new Date(r.createdAt),
+        dueAt: r.dueAt ? new Date(r.dueAt) : null,
+        lastReminderAt: r.lastReminderAt ? new Date(r.lastReminderAt) : null,
+        now,
+    }, deps.cal));
+    if (due.length === 0)
+        return;
+    const items = due.map((r) => ({ taskName: buildTaskName(r.ticketNumber ?? r.id, r.title), dueAt: new Date(r.dueAt) }));
+    for (const message of telegramOverdueDigest(items)) {
+        if (!(await deps.sendTelegram(deps.telegramChatId, message)))
+            return; // not marked: retried on the next run
+    }
+    for (const r of due)
+        await deps.repo.updateTicket(r.id, { lastReminderAt: now.toISOString() });
+    logger.info(`[ticket] overdue reminder sent for ${due.length} task(s)`);
 }
 /**
  * Syncs just the ticket behind one ClickUp task (used by the comment webhook). Returns false when no open
@@ -48,11 +74,7 @@ async function syncTicket(deps, row) {
     const dueAt = row.dueAt ? new Date(row.dueAt) : null;
     const task = await deps.clickup.getTask(taskId);
     if (!task) {
-        await deps.repo.updateTicket(row.id, {
-            status: "CLOSED",
-            closedAt: deps.now().toISOString(),
-            lastError: "ClickUp task no longer exists",
-        }, ["lockedUntil"]);
+        await deps.repo.updateTicket(row.id, { status: "CLOSED", closedAt: deps.now().toISOString(), lastError: "ClickUp task no longer exists" }, ["lockedUntil"]);
         return;
     }
     // ---- 1. comments from people
@@ -69,54 +91,31 @@ async function syncTicket(deps, row) {
             break; // keep the cursor here: this comment is retried on the next run
         cursorMs = c.dateMs;
         hasUpdate = true;
-        await deps.repo.updateTicket(row.id, {
-            hasUpdate: true,
-            lastCommentAt: new Date(cursorMs).toISOString(),
-        });
+        await deps.repo.updateTicket(row.id, { hasUpdate: true, lastCommentAt: new Date(cursorMs).toISOString() });
     }
     if (cursorMs > Date.parse(row.lastCommentAt ?? row.createdAt)) {
         await deps.repo.updateTicket(row.id, { lastCommentAt: new Date(cursorMs).toISOString() });
     }
     // ---- 2. finished in ClickUp
     if (DONE_TYPES.has(task.statusType)) {
-        await deps.repo.updateTicket(row.id, { status: "CLOSED", closedAt: deps.now().toISOString() }, [
-            "lockedUntil",
-        ]);
+        await deps.repo.updateTicket(row.id, { status: "CLOSED", closedAt: deps.now().toISOString() }, ["lockedUntil"]);
         return;
     }
-    // ---- 3. follow-ups
-    if (row.urgency === "ASAP") {
-        // ASAP: no 50% / 70% steps. Report "still open" to Telegram every hour until the task is closed.
-        const now = deps.now();
-        const due = asapReportDue({
-            createdAt: new Date(row.createdAt),
-            lastReportAt: row.lastAsapReportAt ? new Date(row.lastAsapReportAt) : null,
-            now,
-        }, deps.cal);
-        if (due &&
-            (await deps.sendTelegram(deps.telegramChatId, telegramAsapMessage(taskName, dueAt)))) {
-            await deps.repo.updateTicket(row.id, { lastAsapReportAt: now.toISOString() });
-            logger.info(`[ticket] ${row.ticketNumber ?? row.id}: ASAP still-open report sent`);
-        }
-    }
-    else {
-        const steps = dueEscalations({
-            urgencyMinutes: Number(row.urgencyMinutes ?? 0),
-            submittedAt: new Date(row.createdAt),
-            now: deps.now(),
-            hasUpdate,
-            followUpDone: Boolean(row.followUpSentAt),
-            gleedDone: Boolean(row.gleedTaggedAt),
-        }, deps.cal);
-        for (const step of steps)
-            await escalate(deps, row, taskName, taskId, step);
-    }
+    // ---- 3. follow-ups at 50% / 70% (ASAP has none: it is covered by the hourly overdue reminder)
+    const steps = dueEscalations({
+        urgencyMinutes: Number(row.urgencyMinutes ?? 0),
+        submittedAt: new Date(row.createdAt),
+        now: deps.now(),
+        hasUpdate,
+        followUpDone: Boolean(row.followUpSentAt),
+        gleedDone: Boolean(row.gleedTaggedAt),
+    }, deps.cal);
+    for (const step of steps)
+        await escalate(deps, row, taskName, taskId, step);
     await deps.repo.updateTicket(row.id, {}, ["lockedUntil"]);
 }
 async function escalate(deps, row, taskName, taskId, step) {
-    const resolved = row.resolvedAssignees
-        ? JSON.parse(row.resolvedAssignees)
-        : [];
+    const resolved = row.resolvedAssignees ? JSON.parse(row.resolvedAssignees) : [];
     const dueAt = new Date(row.dueAt);
     const number = row.ticketNumber ?? row.id;
     const blocks = step === "followUp"
@@ -134,9 +133,7 @@ async function escalate(deps, row, taskName, taskId, step) {
     await deps.repo.updateTicket(row.id, { [flag]: stamp });
     row[flag] = stamp;
     logger.info(`[ticket] ${number} escalation: ${step}`);
-    await deps
-        .sendTelegram(deps.telegramChatId, telegramEscalationMessage(taskName, step, dueAt))
-        .catch(() => false);
+    await deps.sendTelegram(deps.telegramChatId, telegramEscalationMessage(taskName, step, dueAt)).catch(() => false);
 }
 /** Who gets tagged at 70%: the configured ClickUp user, else the list member named Gleed. */
 async function escalationUser(deps) {

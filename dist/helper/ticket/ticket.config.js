@@ -17,13 +17,7 @@ export const INDEX = {
     ticketsByStatus: 'ticketsByStatusAndSubmittedAt',
     ticketsByNumber: 'ticketsByTicketNumber',
 };
-const FLOW_VARS = [
-    'TICKET_TABLE',
-    'TICKET_COUNTER_TABLE',
-    'TICKET_CLICKUP_LIST_ID',
-    'TASKING_TELEGRAM_CHAT_ID',
-    'CLICKUP_API_TOKEN',
-];
+const FLOW_VARS = ['TICKET_TABLE', 'TICKET_COUNTER_TABLE', 'TICKET_CLICKUP_LIST_ID', 'TASKING_TELEGRAM_CHAT_ID', 'CLICKUP_API_TOKEN'];
 const ROSTER_VARS = ['TICKET_MEMBER_TABLE', 'TICKET_CLICKUP_LIST_ID', 'CLICKUP_API_TOKEN'];
 /** Names of the variables that are empty or missing, so the log can say exactly what to add. */
 export const missingVars = (names, env = process.env) => names.filter((n) => !env[n]);
@@ -73,8 +67,16 @@ export function getBusinessCalendar(env = process.env) {
 //   70%  -> tag Gleed
 // ---------------------------------------------------------------------------------------------
 export const ESCALATION = { followUpAt: 0.5, gleedAt: 0.7 };
-/** ASAP tasks are not escalated at 50% / 70%. Instead Telegram is told they are still open every hour. */
-export const ASAP_REPORT_EVERY_MS = 60 * 60000;
+/**
+ * Hourly reminders: every open task past its due date is listed in one Telegram message on the hour
+ * (06:00 to 17:00). ASAP tasks are due the moment they are created, so they get their first reminder
+ * one hour after creation instead of straight away. The reminder only goes out in the first
+ * REMINDER_WINDOW_MINUTES of each hour (the 5 minute job runs twice in that window, so a failed send is retried).
+ */
+export const ASAP_FIRST_REMINDER_MS = 60 * 60000;
+export const REMINDER_WINDOW_MINUTES = 10;
+/** Set TICKET_CRONS_ALWAYS=true to run the sync job at any hour (handy when testing at night). */
+export const cronsAlwaysOn = (env = process.env) => env.TICKET_CRONS_ALWAYS === 'true';
 /**
  * Who is tagged in ClickUp at 70% (and who gets a task when the person picked has left ClickUp).
  * Set TICKET_ESCALATION_USER_ID to that person's ClickUp user id. If it is not set, the ClickUp list
@@ -87,9 +89,7 @@ export function escalationUserId(env = process.env) {
     return env.TICKET_ESCALATION_USER_ID && Number.isFinite(n) ? n : null;
 }
 /** The people list on the form is kept up to date from ClickUp whenever this is configured. */
-export const rosterEnabled = () => Boolean(process.env.TICKET_MEMBER_TABLE &&
-    process.env.TICKET_CLICKUP_LIST_ID &&
-    process.env.CLICKUP_API_TOKEN);
+export const rosterEnabled = () => Boolean(process.env.TICKET_MEMBER_TABLE && process.env.TICKET_CLICKUP_LIST_ID && process.env.CLICKUP_API_TOKEN);
 /** Task numbers are T-0001, T-0002 ... Set TICKET_NUMBER_PAD=5 for T-00001. */
 export const numberPad = () => Number(process.env.TICKET_NUMBER_PAD) || 4;
 /** Every comment the system posts ends with this, so it can never be mistaken for a user update. */

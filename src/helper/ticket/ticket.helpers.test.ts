@@ -1,7 +1,8 @@
 // src/helper/ticket/ticket.helpers.test.ts  (run with: npm test)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { asapReportDue, dueEscalations, type EscalationInput } from './escalation';
+import { dueEscalations, reminderDue, type EscalationInput } from './escalation';
+import { syncWindowOpen } from './cronHours';
 import {
   buildDescription,
   buildTaskName,
@@ -11,8 +12,8 @@ import {
   gleedComment,
   isBotText,
   formatDueShort,
-  telegramAsapMessage,
   telegramEscalationMessage,
+  telegramOverdueDigest,
   telegramUpdateMessage,
 } from './ticket.format';
 import { BOT_SIGNATURE, getBusinessCalendar } from './ticket.config';
@@ -57,10 +58,6 @@ test('every Telegram message carries the due date as "Due 11 November 14:00"', (
   assert.equal(
     telegramEscalationMessage('T-0002, Test Ticket', 'followUp', due),
     'T-0002, Test Ticket\nDue 11 November 14:00\nNo feedback received on this task yet (50% of the time used).'
-  );
-  assert.equal(
-    telegramAsapMessage('T-0002, Test Ticket', due),
-    'T-0002, Test Ticket\nDue 11 November 14:00\nThis ASAP task is still open.'
   );
   // no due date known: the line is simply left out
   assert.equal(telegramUpdateMessage('T-0002, x', 'A', 'hi'), 'T-0002, x\nA sent this message: hi');
@@ -176,20 +173,89 @@ test('nothing is posted outside business hours; the step waits for 06:00', () =>
   assert.deepEqual(dueEscalations({ ...t, now: sast('2026-11-10T06:05:00') }, cal), ['followUp']); // 35 min used
 });
 
-test('ASAP report: first one hour after creation, then every hour, never at night', () => {
-  const createdAt = sast('2026-11-09T08:00:00');
-  const at = (iso: string, last: string | null = null) =>
-    asapReportDue({ createdAt, lastReportAt: last ? sast(last) : null, now: sast(iso) }, cal);
-  assert.equal(at('2026-11-09T08:59:00'), false);
-  assert.equal(at('2026-11-09T09:00:00'), true);
-  assert.equal(at('2026-11-09T09:30:00', '2026-11-09T09:00:00'), false);
-  assert.equal(at('2026-11-09T10:00:00', '2026-11-09T09:00:00'), true);
-  assert.equal(at('2026-11-09T18:00:00', '2026-11-09T16:00:00'), false); // after 17:00
-  assert.equal(at('2026-11-10T06:00:00', '2026-11-09T16:00:00'), true); // first thing next morning
-});
-
 test('overnight time does not count: 16H task submitted 16:00', () => {
   const t = base({ urgencyMinutes: 960, submittedAt: sast('2026-11-09T16:00:00') });
   // 60 min used by 17:00, 60 more by 07:00 next day = 120 of 960: nowhere near 50%
   assert.deepEqual(dueEscalations({ ...t, now: sast('2026-11-10T07:00:00') }, cal), []);
+});
+
+// ---------------------------------------------------------------- hourly overdue reminder
+test('digest: one message, oldest first, with a count and each due date, special characters escaped', () => {
+  const [msg, ...rest] = telegramOverdueDigest([
+    { taskName: 'T-0002, Later_task', dueAt: sast('2026-11-09T12:00:00') },
+    { taskName: 'T-0001, Earlier', dueAt: sast('2026-11-09T09:00:00') },
+  ]);
+  assert.equal(rest.length, 0);
+  assert.equal(
+    msg,
+    'Overdue tasks, still open (2):\n\nT-0001, Earlier\nDue 9 November 09:00\n\nT-0002, Later\\_task\nDue 9 November 12:00'
+  );
+});
+
+test('digest: a very long list is split into several messages, none over the Telegram limit', () => {
+  const items = Array.from({ length: 120 }, (_, i) => ({
+    taskName: `T-${String(i + 1).padStart(4, '0')}, ${'x'.repeat(60)}`,
+    dueAt: sast('2026-11-09T09:00:00'),
+  }));
+  const messages = telegramOverdueDigest(items);
+  assert.ok(messages.length > 1);
+  assert.ok(messages.every((m) => m.length < 4096));
+  assert.match(messages[1], /^Overdue tasks, continued:/);
+  assert.equal(messages.join('\n').match(/T-\d{4}/g)!.length, 120); // nothing dropped
+});
+
+test('digest: nothing to report gives no message', () => {
+  assert.deepEqual(telegramOverdueDigest([]), []);
+});
+
+test('reminder: an open task past its due date is listed on the hour, but not before it is due', () => {
+  const t = (now: string, last: string | null = null) =>
+    reminderDue(
+      {
+        urgency: '4H',
+        createdAt: sast('2026-11-09T08:00:00'),
+        dueAt: sast('2026-11-09T12:00:00'),
+        lastReminderAt: last ? sast(last) : null,
+        now: sast(now),
+      },
+      cal
+    );
+  assert.equal(t('2026-11-09T11:05:00'), false); // not due yet
+  assert.equal(t('2026-11-09T12:00:00'), true);
+  assert.equal(t('2026-11-09T12:05:00'), true); // second run in the same window
+  assert.equal(t('2026-11-09T12:30:00'), false); // only in the first minutes of the hour
+  assert.equal(t('2026-11-09T12:05:00', '2026-11-09T12:00:00'), false); // already reminded this hour
+  assert.equal(t('2026-11-09T13:00:00', '2026-11-09T12:00:00'), true); // and again next hour
+});
+
+test('reminder: never outside business hours, and nothing without a due date', () => {
+  const base = {
+    urgency: '4H',
+    createdAt: sast('2026-11-09T08:00:00'),
+    dueAt: sast('2026-11-09T12:00:00'),
+    lastReminderAt: null,
+  };
+  assert.equal(reminderDue({ ...base, now: sast('2026-11-09T17:00:00') }, cal), false);
+  assert.equal(reminderDue({ ...base, now: sast('2026-11-09T20:00:00') }, cal), false);
+  assert.equal(reminderDue({ ...base, now: sast('2026-11-10T06:00:00') }, cal), true); // first thing next morning
+  assert.equal(reminderDue({ ...base, dueAt: null, now: sast('2026-11-09T13:00:00') }, cal), false);
+});
+
+test('reminder: ASAP tasks join one hour after creation', () => {
+  const base = {
+    urgency: 'ASAP',
+    createdAt: sast('2026-11-09T08:00:00'),
+    dueAt: sast('2026-11-09T08:00:00'),
+    lastReminderAt: null,
+  };
+  assert.equal(reminderDue({ ...base, now: sast('2026-11-09T08:05:00') }, cal), false);
+  assert.equal(reminderDue({ ...base, now: sast('2026-11-09T09:00:00') }, cal), true);
+});
+
+test('sync window: 06:00 to 17:00 only, unless switched to always', () => {
+  assert.equal(syncWindowOpen(sast('2026-11-09T05:59:00'), cal, false), false);
+  assert.equal(syncWindowOpen(sast('2026-11-09T06:00:00'), cal, false), true);
+  assert.equal(syncWindowOpen(sast('2026-11-09T16:59:00'), cal, false), true);
+  assert.equal(syncWindowOpen(sast('2026-11-09T17:00:00'), cal, false), false);
+  assert.equal(syncWindowOpen(sast('2026-11-09T23:00:00'), cal, true), true);
 });

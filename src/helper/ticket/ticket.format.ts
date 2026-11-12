@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.format.ts  (NEW FILE)
+// src/helper/ticket/ticket.format.ts
 // TICKETING: pure text builders for ClickUp and Telegram.
 import { DateTime } from 'luxon';
 import { BOT_SIGNATURE, MAX_TELEGRAM_TEXT } from './ticket.config';
@@ -76,9 +76,39 @@ export function telegramEscalationMessage(
   );
 }
 
-/** ASAP tasks: reported every hour until the ClickUp task is closed. */
-export const telegramAsapMessage = (taskName: string, dueAt?: Date | null): string =>
-  clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nThis ASAP task is still open.`);
+export interface OverdueItem {
+  taskName: string;
+  dueAt: Date;
+}
+
+/**
+ * The hourly reminder: every open task past its due date in one message (oldest first). Split into
+ * several messages only if the list is too long for Telegram.
+ */
+export function telegramOverdueDigest(items: OverdueItem[]): string[] {
+  const entries = [...items]
+    .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime())
+    .map((i) => `${escapeTelegram(i.taskName)}\nDue ${formatDueShort(i.dueAt)}`);
+  const messages: string[] = [];
+  let current = '';
+  for (const entry of entries) {
+    if (current && current.length + entry.length + 2 > MAX_TELEGRAM_TEXT) {
+      messages.push(current);
+      current = '';
+    }
+    if (!current) {
+      const header =
+        messages.length === 0
+          ? `Overdue tasks, still open (${entries.length}):`
+          : 'Overdue tasks, continued:';
+      current = `${header}\n\n${entry}`;
+    } else {
+      current = `${current}\n\n${entry}`;
+    }
+  }
+  if (current) messages.push(current);
+  return messages;
+}
 
 export const telegramCreatedMessage = (
   taskName: string,

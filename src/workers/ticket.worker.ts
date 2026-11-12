@@ -10,6 +10,7 @@ import { processSubmittedTickets, type IntakeDeps } from '../services/ticket.int
 import { syncOpenTickets } from '../services/ticket.sync.service';
 import { ticketCommonDeps, ticketSyncDeps } from '../services/ticket.deps';
 import { refreshRoster } from '../services/ticket.roster.service';
+import { syncWindowOpen } from '../helper/ticket/cronHours';
 import {
   GLEED_NAME,
   assigneeOverrides,
@@ -74,6 +75,9 @@ export const ticketSyncWorker = createWorker('ticket-sync', async () => {
     }
   }
   if (!enabled()) return;
+  // Reminders, follow-ups and forwarding replies only run 06:00 to 17:00. Replies posted overnight are
+  // forwarded on the first run of the morning (they are read from ClickUp by time, so none are lost).
+  if (!syncWindowOpen(new Date(), getBusinessCalendar())) return;
   try {
     await syncOpenTickets(ticketSyncDeps());
   } catch (err) {

@@ -1,4 +1,4 @@
-// src/controllers/telegram.webhook.controller.ts  (NEW FILE)
+// src/controllers/telegram.webhook.controller.ts
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import logger from '../utils/logger';

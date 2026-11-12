@@ -1,4 +1,4 @@
-// src/helper/ticket/escalation.ts  (NEW FILE)
+// src/helper/ticket/escalation.ts
 // TICKETING: decides which escalations are due for one ticket. Pure.
 //
 // Rules (from the spreadsheet):
@@ -9,7 +9,13 @@
 // "Used" is measured in business minutes since the ticket was submitted, so a 16H task does
 // not escalate overnight. Nothing is posted outside business hours; it waits for 06:00.
 import { businessMinutesBetween, isBusinessTime } from './businessTime';
-import { ASAP_REPORT_EVERY_MS, ESCALATION, type BusinessCalendar } from './ticket.config';
+import { DateTime } from 'luxon';
+import {
+  ASAP_FIRST_REMINDER_MS,
+  ESCALATION,
+  REMINDER_WINDOW_MINUTES,
+  type BusinessCalendar,
+} from './ticket.config';
 import type { EscalationStep } from './ticket.format';
 
 export interface EscalationInput {
@@ -22,7 +28,7 @@ export interface EscalationInput {
 }
 
 export function dueEscalations(input: EscalationInput, cal: BusinessCalendar): EscalationStep[] {
-  if (input.urgencyMinutes <= 0) return []; // ASAP: see asapReportDue
+  if (input.urgencyMinutes <= 0) return []; // ASAP: covered by the hourly overdue reminder (reminderDue)
   if (input.hasUpdate) return [];
   if (!isBusinessTime(input.now, cal)) return [];
 
@@ -35,15 +41,29 @@ export function dueEscalations(input: EscalationInput, cal: BusinessCalendar): E
 }
 
 /**
- * ASAP tasks: true when Telegram should be told the task is still open. First report one hour after
- * the task was created, then one every hour, until the ClickUp task is closed (a reply does not stop it).
- * Only inside business hours; after a quiet night there is ONE report at 06:00, not a catch-up.
+ * Hourly reminder for an open task that is past its due date. True when this task belongs in the reminder
+ * sent now: inside business hours, in the first minutes of the hour, not already reminded this hour, and
+ * past due. ASAP tasks are due when created, so they start one hour after creation. A reply does not stop
+ * it; only closing the ClickUp task does.
  */
-export function asapReportDue(
-  input: { createdAt: Date; lastReportAt: Date | null; now: Date },
+export function reminderDue(
+  input: {
+    urgency: string;
+    createdAt: Date;
+    dueAt: Date | null;
+    lastReminderAt: Date | null;
+    now: Date;
+  },
   cal: BusinessCalendar
 ): boolean {
-  if (!isBusinessTime(input.now, cal)) return false;
-  const since = input.lastReportAt ?? input.createdAt;
-  return input.now.getTime() - since.getTime() >= ASAP_REPORT_EVERY_MS;
+  if (!input.dueAt || !isBusinessTime(input.now, cal)) return false;
+  const local = DateTime.fromJSDate(input.now, { zone: cal.zone });
+  if (local.minute >= REMINDER_WINDOW_MINUTES) return false;
+  if (input.lastReminderAt && input.lastReminderAt.getTime() >= local.startOf('hour').toMillis())
+    return false;
+  const overdueFrom =
+    input.urgency === 'ASAP'
+      ? input.createdAt.getTime() + ASAP_FIRST_REMINDER_MS
+      : input.dueAt.getTime();
+  return input.now.getTime() >= overdueFrom;
 }

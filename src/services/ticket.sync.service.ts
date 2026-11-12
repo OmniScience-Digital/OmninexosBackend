@@ -7,15 +7,15 @@
 import logger from '../utils/logger';
 import type { TicketClickUp } from './ticket.clickup.service';
 import type { TicketRepo } from './ticket.intake.service';
-import { asapReportDue, dueEscalations } from '../helper/ticket/escalation';
+import { dueEscalations, reminderDue } from '../helper/ticket/escalation';
 import { escalationTarget } from '../helper/ticket/ticket.assignees';
 import {
   buildTaskName,
   followUpComment,
   gleedComment,
   isBotText,
-  telegramAsapMessage,
   telegramEscalationMessage,
+  telegramOverdueDigest,
   telegramUpdateMessage,
   type EscalationStep,
   type ResolvedAssignee,
@@ -49,6 +49,39 @@ async function syncTicketSafely(deps: SyncDeps, row: Row) {
 /** Runs one pass. One ticket failing never stops the others. */
 export async function syncOpenTickets(deps: SyncDeps): Promise<void> {
   for (const row of await deps.repo.listTicketsByStatus('OPEN')) await syncTicketSafely(deps, row);
+  await sendOverdueReminder(deps);
+}
+
+/**
+ * The hourly reminder: every open task past its due date, in one Telegram message. Runs after the
+ * tickets are synced, so a task closed a moment ago is not listed. Tickets are only marked as
+ * reminded once their message was sent, so a failed send is retried on the next run.
+ */
+async function sendOverdueReminder(deps: SyncDeps): Promise<void> {
+  const now = deps.now();
+  const due = (await deps.repo.listTicketsByStatus('OPEN')).filter((r) =>
+    reminderDue(
+      {
+        urgency: r.urgency,
+        createdAt: new Date(r.createdAt),
+        dueAt: r.dueAt ? new Date(r.dueAt) : null,
+        lastReminderAt: r.lastReminderAt ? new Date(r.lastReminderAt) : null,
+        now,
+      },
+      deps.cal
+    )
+  );
+  if (due.length === 0) return;
+
+  const items = due.map((r) => ({
+    taskName: buildTaskName(r.ticketNumber ?? r.id, r.title),
+    dueAt: new Date(r.dueAt),
+  }));
+  for (const message of telegramOverdueDigest(items)) {
+    if (!(await deps.sendTelegram(deps.telegramChatId, message))) return; // not marked: retried on the next run
+  }
+  for (const r of due) await deps.repo.updateTicket(r.id, { lastReminderAt: now.toISOString() });
+  logger.info(`[ticket] overdue reminder sent for ${due.length} task(s)`);
 }
 
 /**
@@ -119,39 +152,19 @@ async function syncTicket(deps: SyncDeps, row: Row) {
     return;
   }
 
-  // ---- 3. follow-ups
-  if (row.urgency === 'ASAP') {
-    // ASAP: no 50% / 70% steps. Report "still open" to Telegram every hour until the task is closed.
-    const now = deps.now();
-    const due = asapReportDue(
-      {
-        createdAt: new Date(row.createdAt),
-        lastReportAt: row.lastAsapReportAt ? new Date(row.lastAsapReportAt) : null,
-        now,
-      },
-      deps.cal
-    );
-    if (
-      due &&
-      (await deps.sendTelegram(deps.telegramChatId, telegramAsapMessage(taskName, dueAt)))
-    ) {
-      await deps.repo.updateTicket(row.id, { lastAsapReportAt: now.toISOString() });
-      logger.info(`[ticket] ${row.ticketNumber ?? row.id}: ASAP still-open report sent`);
-    }
-  } else {
-    const steps = dueEscalations(
-      {
-        urgencyMinutes: Number(row.urgencyMinutes ?? 0),
-        submittedAt: new Date(row.createdAt),
-        now: deps.now(),
-        hasUpdate,
-        followUpDone: Boolean(row.followUpSentAt),
-        gleedDone: Boolean(row.gleedTaggedAt),
-      },
-      deps.cal
-    );
-    for (const step of steps) await escalate(deps, row, taskName, taskId, step);
-  }
+  // ---- 3. follow-ups at 50% / 70% (ASAP has none: it is covered by the hourly overdue reminder)
+  const steps = dueEscalations(
+    {
+      urgencyMinutes: Number(row.urgencyMinutes ?? 0),
+      submittedAt: new Date(row.createdAt),
+      now: deps.now(),
+      hasUpdate,
+      followUpDone: Boolean(row.followUpSentAt),
+      gleedDone: Boolean(row.gleedTaggedAt),
+    },
+    deps.cal
+  );
+  for (const step of steps) await escalate(deps, row, taskName, taskId, step);
 
   await deps.repo.updateTicket(row.id, {}, ['lockedUntil']);
 }

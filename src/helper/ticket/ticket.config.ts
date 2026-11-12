@@ -96,8 +96,18 @@ export function getBusinessCalendar(env: NodeJS.ProcessEnv = process.env): Busin
 // ---------------------------------------------------------------------------------------------
 export const ESCALATION = { followUpAt: 0.5, gleedAt: 0.7 } as const;
 
-/** ASAP tasks are not escalated at 50% / 70%. Instead Telegram is told they are still open every hour. */
-export const ASAP_REPORT_EVERY_MS = 60 * 60_000;
+/**
+ * Hourly reminders: every open task past its due date is listed in one Telegram message on the hour
+ * (06:00 to 17:00). ASAP tasks are due the moment they are created, so they get their first reminder
+ * one hour after creation instead of straight away. The reminder only goes out in the first
+ * REMINDER_WINDOW_MINUTES of each hour (the 5 minute job runs twice in that window, so a failed send is retried).
+ */
+export const ASAP_FIRST_REMINDER_MS = 60 * 60_000;
+export const REMINDER_WINDOW_MINUTES = 10;
+
+/** Set TICKET_CRONS_ALWAYS=true to run the sync job at any hour (handy when testing at night). */
+export const cronsAlwaysOn = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  env.TICKET_CRONS_ALWAYS === 'true';
 
 /**
  * Who is tagged in ClickUp at 70% (and who gets a task when the person picked has left ClickUp).

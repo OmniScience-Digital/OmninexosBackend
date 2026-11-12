@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.format.ts  (NEW FILE)
+// src/helper/ticket/ticket.format.ts
 // TICKETING: pure text builders for ClickUp and Telegram.
 import { DateTime } from "luxon";
 import { BOT_SIGNATURE, MAX_TELEGRAM_TEXT } from "./ticket.config.js";
@@ -14,11 +14,7 @@ export function buildDescription(p) {
     const who = p.assignees
         .map((a) => (a.fallback ? `${a.name} (not on ClickUp)` : a.name))
         .join(", ");
-    return [
-        `Assignees: ${who}`,
-        `Due Date: ${formatDue(p.dueAt)}`,
-        `Required Outcome: ${p.requiredOutcome.trim()}`,
-    ].join("\n");
+    return [`Assignees: ${who}`, `Due Date: ${formatDue(p.dueAt)}`, `Required Outcome: ${p.requiredOutcome.trim()}`].join("\n");
 }
 // ------------------------------------------------------------------ Telegram (legacy Markdown)
 // The shared Telegram service sends with parse_mode "Markdown", where _ * ` [ start formatting.
@@ -35,8 +31,33 @@ export function telegramEscalationMessage(taskName, step, dueAt) {
     const pct = step === "followUp" ? "50%" : "70%";
     return clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nNo feedback received on this task yet (${pct} of the time used).`);
 }
-/** ASAP tasks: reported every hour until the ClickUp task is closed. */
-export const telegramAsapMessage = (taskName, dueAt) => clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nThis ASAP task is still open.`);
+/**
+ * The hourly reminder: every open task past its due date in one message (oldest first). Split into
+ * several messages only if the list is too long for Telegram.
+ */
+export function telegramOverdueDigest(items) {
+    const entries = [...items]
+        .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime())
+        .map((i) => `${escapeTelegram(i.taskName)}\nDue ${formatDueShort(i.dueAt)}`);
+    const messages = [];
+    let current = "";
+    for (const entry of entries) {
+        if (current && current.length + entry.length + 2 > MAX_TELEGRAM_TEXT) {
+            messages.push(current);
+            current = "";
+        }
+        if (!current) {
+            const header = messages.length === 0 ? `Overdue tasks, still open (${entries.length}):` : "Overdue tasks, continued:";
+            current = `${header}\n\n${entry}`;
+        }
+        else {
+            current = `${current}\n\n${entry}`;
+        }
+    }
+    if (current)
+        messages.push(current);
+    return messages;
+}
 export const telegramCreatedMessage = (taskName, assignees, dueAt) => clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nTask created for ${escapeTelegram(assignees.join(", "))}.`);
 const tag = (id) => ({ type: "tag", user: { id } });
 /** 50%: tag the assignee(s) and ask for an update. */

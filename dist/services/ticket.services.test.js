@@ -21,10 +21,7 @@ function world(start = "2026-11-09T08:00:00") {
     let counter = 0;
     const repo = {
         async listTicketsByStatus(status, max) {
-            return [...rows.values()]
-                .filter((r) => r.status === status)
-                .slice(0, max)
-                .map((r) => structuredClone(r));
+            return [...rows.values()].filter((r) => r.status === status).slice(0, max).map((r) => structuredClone(r));
         },
         async claimTicket(id, expect, nowMs, leaseMs) {
             const r = rows.get(id);
@@ -85,21 +82,13 @@ function world(start = "2026-11-09T08:00:00") {
             return t ? { id, statusType: t.statusType } : null;
         },
         async listComments(id, since) {
-            return (comments[id] ?? [])
-                .filter((c) => c.dateMs > since)
-                .sort((a, b) => a.dateMs - b.dateMs);
+            return (comments[id] ?? []).filter((c) => c.dateMs > since).sort((a, b) => a.dateMs - b.dateMs);
         },
         async postComment(id, blocks) {
             const cid = `bot${nextId++}`;
             posted.push({ taskId: id, blocks });
             const text = blocks.map((b) => ("text" in b ? b.text : "@tag")).join("");
-            comments[id].push({
-                id: cid,
-                text,
-                userId: 99,
-                userName: "Token owner",
-                dateMs: clock.getTime(),
-            });
+            comments[id].push({ id: cid, text, userId: 99, userName: "Token owner", dateMs: clock.getTime() });
             return { id: cid };
         },
     };
@@ -159,13 +148,7 @@ function world(start = "2026-11-09T08:00:00") {
         setClock: (iso) => (clock = sast(iso)),
         advance: (ms) => (clock = new Date(clock.getTime() + ms)),
         setTelegramOk: (ok) => (telegramOk = ok),
-        human: (taskId, text, at, name = "Sean Fray") => comments[taskId].push({
-            id: `h${nextId++}`,
-            text,
-            userId: 1,
-            userName: name,
-            dateMs: sast(at).getTime(),
-        }),
+        human: (taskId, text, at, name = "Sean Fray") => comments[taskId].push({ id: `h${nextId++}`, text, userId: 1, userName: name, dateMs: sast(at).getTime() }),
     };
 }
 // ------------------------------------------------------------------ intake
@@ -270,9 +253,7 @@ test("sync: a person's comment goes to Telegram once and counts as an update", a
     w.advance(5 * 60000);
     w.human(taskId, "I have started", "2026-11-09T08:03:00");
     await syncOpenTickets(w.sync);
-    assert.deepEqual(w.telegram, [
-        "T-0001, Fix the pump\nDue 9 November 12:00\nSean Fray sent this message: I have started",
-    ]);
+    assert.deepEqual(w.telegram, ["T-0001, Fix the pump\nDue 9 November 12:00\nSean Fray sent this message: I have started"]);
     assert.equal(w.rows.get(id).hasUpdate, true);
     w.advance(5 * 60000);
     await syncOpenTickets(w.sync);
@@ -330,60 +311,6 @@ test("sync: an update before 50% means no escalation at all", async () => {
     await syncOpenTickets(w.sync);
     assert.equal(w.posted.length, 0);
     assert.equal(w.telegram.length, 1); // just the forwarded update
-});
-test("sync: ASAP is reported to Telegram every hour while open; no ClickUp comment, no tagging, a reply does not stop it", async () => {
-    const w = world();
-    const { id, taskId } = await openTicket(w, { urgency: "ASAP" });
-    w.setClock("2026-11-09T08:55:00");
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 0);
-    w.setClock("2026-11-09T09:00:00");
-    await syncOpenTickets(w.sync);
-    assert.deepEqual(w.telegram, [
-        "T-0001, Fix the pump\nDue 9 November 08:00\nThis ASAP task is still open.",
-    ]);
-    w.setClock("2026-11-09T09:30:00"); // not again within the hour
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 1);
-    w.human(taskId, "Working on it", "2026-11-09T09:40:00"); // a reply is forwarded, but does not stop the reports
-    w.setClock("2026-11-09T10:00:00");
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.filter((t) => t.includes("still open")).length, 2);
-    assert.equal(w.telegram.filter((t) => t.includes("sent this message")).length, 1);
-    assert.equal(w.posted.length, 0); // nothing posted to ClickUp, nobody tagged
-    assert.equal(w.rows.get(id).followUpSentAt, undefined);
-    w.tasks.get(taskId).statusType = "closed"; // closing the task stops it
-    w.setClock("2026-11-09T11:00:00");
-    await syncOpenTickets(w.sync);
-    assert.equal(w.rows.get(id).status, "CLOSED");
-    assert.equal(w.telegram.filter((t) => t.includes("still open")).length, 2);
-});
-test("sync: ASAP reports wait for business hours and do not pile up overnight", async () => {
-    const w = world("2026-11-09T16:30:00");
-    await openTicket(w, { urgency: "ASAP" });
-    w.setClock("2026-11-09T17:35:00"); // an hour later but after closing
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 0);
-    w.setClock("2026-11-10T06:05:00"); // one report first thing, not one per missed hour
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 1);
-    w.setClock("2026-11-10T06:30:00");
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 1);
-    w.setClock("2026-11-10T07:10:00");
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 2);
-});
-test("sync: an ASAP report that could not be sent is retried, not skipped", async () => {
-    const w = world();
-    await openTicket(w, { urgency: "ASAP" });
-    w.setClock("2026-11-09T09:00:00");
-    w.setTelegramOk(false);
-    await syncOpenTickets(w.sync);
-    w.setTelegramOk(true);
-    w.setClock("2026-11-09T09:05:00");
-    await syncOpenTickets(w.sync);
-    assert.equal(w.telegram.length, 1);
 });
 test("sync: finished or deleted ClickUp tasks close the ticket and stop all follow-ups", async () => {
     const w = world();
@@ -465,11 +392,7 @@ test("resolveTicketAssignees: nobody picked still gets an owner", () => {
 });
 test("resolveTicketAssignees: two without accounts, labelled when the names line up", () => {
     const r = resolveTicketAssignees(["Marco", "Gleed", "Visitor"], ["1"], MEMBERS, 9, {}, "Gleed");
-    assert.deepEqual(r.assignees.map((a) => [a.name, a.fallback]), [
-        ["Marco Venter", false],
-        ["Gleed", true],
-        ["Visitor", true],
-    ]);
+    assert.deepEqual(r.assignees.map((a) => [a.name, a.fallback]), [["Marco Venter", false], ["Gleed", true], ["Visitor", true]]);
 });
 test("70%: the configured ClickUp user is tagged, even if that person is not on the list", async () => {
     const w = world();
@@ -508,35 +431,23 @@ function rosterWorld(initial = []) {
 }
 test("roster: copies ClickUp members, then only writes what changed", async () => {
     const r = rosterWorld();
-    r.setMembers([
-        { id: 1, username: "Marco Venter", email: "m@x.co", avatarUrl: "https://a/1.png" },
-        { id: 2, username: "Byron Smit" },
-    ]);
+    r.setMembers([{ id: 1, username: "Marco Venter", email: "m@x.co", avatarUrl: "https://a/1.png" }, { id: 2, username: "Byron Smit" }]);
     assert.equal(await r.run(), 2);
     assert.equal(r.table.get("1").avatarUrl, "https://a/1.png");
     assert.equal(r.table.get("1").isActive, true);
     assert.equal(await r.run(), 0); // nothing changed, nothing written
-    r.setMembers([
-        { id: 1, username: "Marco V", email: "m@x.co", avatarUrl: "https://a/1.png" },
-        { id: 2, username: "Byron Smit" },
-    ]);
+    r.setMembers([{ id: 1, username: "Marco V", email: "m@x.co", avatarUrl: "https://a/1.png" }, { id: 2, username: "Byron Smit" }]);
     assert.equal(await r.run(), 1);
     assert.equal(r.table.get("1").name, "Marco V");
 });
 test("roster: someone removed from ClickUp is switched off, and comes back when re-added", async () => {
     const r = rosterWorld();
-    r.setMembers([
-        { id: 1, username: "Marco" },
-        { id: 2, username: "Byron" },
-    ]);
+    r.setMembers([{ id: 1, username: "Marco" }, { id: 2, username: "Byron" }]);
     await r.run();
     r.setMembers([{ id: 1, username: "Marco" }]);
     await r.run();
     assert.equal(r.table.get("2").isActive, false);
-    r.setMembers([
-        { id: 1, username: "Marco" },
-        { id: 2, username: "Byron" },
-    ]);
+    r.setMembers([{ id: 1, username: "Marco" }, { id: 2, username: "Byron" }]);
     await r.run();
     assert.equal(r.table.get("2").isActive, true);
 });
@@ -574,4 +485,96 @@ test("webhook: a task with no open ticket is ignored, and a busy ticket is skipp
     w.rows.get(a.id).lockedUntil = w.sync.now().getTime() + 60000; // the 5 minute run holds it
     await syncTicketByTaskId(w.sync, a.taskId);
     assert.equal(w.telegram.length, 0); // skipped: that run will read the same comments
+});
+// ------------------------------------------------------------------ hourly overdue reminder
+const digests = (w) => w.telegram.filter((t) => t.startsWith("Overdue tasks"));
+test("reminder: a task past its due date is listed every hour until it is closed; a reply does not stop it", async () => {
+    const w = world(); // 4H from 08:00, due 12:00
+    const { id, taskId } = await openTicket(w);
+    w.human(taskId, "On it", "2026-11-09T08:30:00");
+    w.setClock("2026-11-09T11:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 0); // not due yet
+    w.setClock("2026-11-09T12:05:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    assert.match(digests(w)[0], /T-0001, Fix the pump\nDue 9 November 12:00/);
+    w.setClock("2026-11-09T12:30:00"); // not again within the hour
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    w.setClock("2026-11-09T13:00:00");
+    await syncOpenTickets(w.sync);
+    w.setClock("2026-11-09T16:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 3);
+    w.setClock("2026-11-09T17:00:00"); // 17:00 is outside business hours
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 3);
+    w.tasks.get(taskId).statusType = "closed"; // closing the ClickUp task ends the reminders
+    w.setClock("2026-11-10T06:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(w.rows.get(id).status, "CLOSED");
+    assert.equal(digests(w).length, 3);
+});
+test("reminder: ASAP tasks have no 50/70% steps and join the hourly reminder one hour after creation", async () => {
+    const w = world();
+    const { id } = await openTicket(w, { urgency: "ASAP" });
+    w.setClock("2026-11-09T08:05:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 0);
+    w.setClock("2026-11-09T09:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    assert.match(digests(w)[0], /T-0001, Fix the pump\nDue 9 November 08:00/);
+    w.setClock("2026-11-09T09:05:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    w.setClock("2026-11-09T10:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 2);
+    assert.equal(w.posted.length, 0); // nothing posted to ClickUp, nobody tagged
+    assert.equal(w.rows.get(id).followUpSentAt, undefined);
+});
+test("reminder: several overdue tasks arrive in ONE message, oldest due date first", async () => {
+    const w = world();
+    const a = await openTicket(w); // T-0001, 4H, due 12:00
+    const b = await openTicket(w, { urgency: "1H" }); // T-0002, due 09:00
+    w.human(a.taskId, "ok", "2026-11-09T08:10:00");
+    w.human(b.taskId, "ok", "2026-11-09T08:10:00");
+    w.setClock("2026-11-09T12:05:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    const msg = digests(w)[0];
+    assert.match(msg, /still open \(2\)/);
+    assert.ok(msg.indexOf("T-0002") < msg.indexOf("T-0001"));
+});
+test("reminder: a failed Telegram send is retried in the same hour and never sent twice", async () => {
+    const w = world();
+    const { taskId } = await openTicket(w);
+    w.human(taskId, "ok", "2026-11-09T08:10:00");
+    w.setClock("2026-11-09T12:00:00");
+    w.setTelegramOk(false);
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 0);
+    w.setTelegramOk(true);
+    w.setClock("2026-11-09T12:05:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    w.setClock("2026-11-09T12:10:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+});
+test("reminder: nothing overnight; the first reminder comes at 06:00", async () => {
+    const w = world();
+    const { taskId } = await openTicket(w);
+    w.human(taskId, "ok", "2026-11-09T08:10:00");
+    w.setClock("2026-11-09T18:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 0);
+    w.setClock("2026-11-10T06:00:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
+    w.setClock("2026-11-10T06:05:00");
+    await syncOpenTickets(w.sync);
+    assert.equal(digests(w).length, 1);
 });

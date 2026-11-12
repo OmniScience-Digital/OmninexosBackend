@@ -381,69 +381,6 @@ test('sync: an update before 50% means no escalation at all', async () => {
   assert.equal(w.telegram.length, 1); // just the forwarded update
 });
 
-test('sync: ASAP is reported to Telegram every hour while open; no ClickUp comment, no tagging, a reply does not stop it', async () => {
-  const w = world();
-  const { id, taskId } = await openTicket(w, { urgency: 'ASAP' });
-
-  w.setClock('2026-11-09T08:55:00');
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 0);
-
-  w.setClock('2026-11-09T09:00:00');
-  await syncOpenTickets(w.sync);
-  assert.deepEqual(w.telegram, [
-    'T-0001, Fix the pump\nDue 9 November 08:00\nThis ASAP task is still open.',
-  ]);
-
-  w.setClock('2026-11-09T09:30:00'); // not again within the hour
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 1);
-
-  w.human(taskId, 'Working on it', '2026-11-09T09:40:00'); // a reply is forwarded, but does not stop the reports
-  w.setClock('2026-11-09T10:00:00');
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.filter((t) => t.includes('still open')).length, 2);
-  assert.equal(w.telegram.filter((t) => t.includes('sent this message')).length, 1);
-
-  assert.equal(w.posted.length, 0); // nothing posted to ClickUp, nobody tagged
-  assert.equal(w.rows.get(id)!.followUpSentAt, undefined);
-
-  w.tasks.get(taskId)!.statusType = 'closed'; // closing the task stops it
-  w.setClock('2026-11-09T11:00:00');
-  await syncOpenTickets(w.sync);
-  assert.equal(w.rows.get(id)!.status, 'CLOSED');
-  assert.equal(w.telegram.filter((t) => t.includes('still open')).length, 2);
-});
-
-test('sync: ASAP reports wait for business hours and do not pile up overnight', async () => {
-  const w = world('2026-11-09T16:30:00');
-  await openTicket(w, { urgency: 'ASAP' });
-  w.setClock('2026-11-09T17:35:00'); // an hour later but after closing
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 0);
-  w.setClock('2026-11-10T06:05:00'); // one report first thing, not one per missed hour
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 1);
-  w.setClock('2026-11-10T06:30:00');
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 1);
-  w.setClock('2026-11-10T07:10:00');
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 2);
-});
-
-test('sync: an ASAP report that could not be sent is retried, not skipped', async () => {
-  const w = world();
-  await openTicket(w, { urgency: 'ASAP' });
-  w.setClock('2026-11-09T09:00:00');
-  w.setTelegramOk(false);
-  await syncOpenTickets(w.sync);
-  w.setTelegramOk(true);
-  w.setClock('2026-11-09T09:05:00');
-  await syncOpenTickets(w.sync);
-  assert.equal(w.telegram.length, 1);
-});
-
 test('sync: finished or deleted ClickUp tasks close the ticket and stop all follow-ups', async () => {
   const w = world();
   const a = await openTicket(w);
@@ -659,4 +596,115 @@ test('webhook: a task with no open ticket is ignored, and a busy ticket is skipp
   w.rows.get(a.id)!.lockedUntil = w.sync.now().getTime() + 60_000; // the 5 minute run holds it
   await syncTicketByTaskId(w.sync, a.taskId);
   assert.equal(w.telegram.length, 0); // skipped: that run will read the same comments
+});
+
+// ------------------------------------------------------------------ hourly overdue reminder
+const digests = (w: ReturnType<typeof world>) =>
+  w.telegram.filter((t) => t.startsWith('Overdue tasks'));
+
+test('reminder: a task past its due date is listed every hour until it is closed; a reply does not stop it', async () => {
+  const w = world(); // 4H from 08:00, due 12:00
+  const { id, taskId } = await openTicket(w);
+  w.human(taskId, 'On it', '2026-11-09T08:30:00');
+
+  w.setClock('2026-11-09T11:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 0); // not due yet
+
+  w.setClock('2026-11-09T12:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+  assert.match(digests(w)[0], /T-0001, Fix the pump\nDue 9 November 12:00/);
+
+  w.setClock('2026-11-09T12:30:00'); // not again within the hour
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+
+  w.setClock('2026-11-09T13:00:00');
+  await syncOpenTickets(w.sync);
+  w.setClock('2026-11-09T16:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 3);
+
+  w.setClock('2026-11-09T17:00:00'); // 17:00 is outside business hours
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 3);
+
+  w.tasks.get(taskId)!.statusType = 'closed'; // closing the ClickUp task ends the reminders
+  w.setClock('2026-11-10T06:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.rows.get(id)!.status, 'CLOSED');
+  assert.equal(digests(w).length, 3);
+});
+
+test('reminder: ASAP tasks have no 50/70% steps and join the hourly reminder one hour after creation', async () => {
+  const w = world();
+  const { id } = await openTicket(w, { urgency: 'ASAP' });
+
+  w.setClock('2026-11-09T08:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 0);
+
+  w.setClock('2026-11-09T09:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+  assert.match(digests(w)[0], /T-0001, Fix the pump\nDue 9 November 08:00/);
+
+  w.setClock('2026-11-09T09:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+  w.setClock('2026-11-09T10:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 2);
+
+  assert.equal(w.posted.length, 0); // nothing posted to ClickUp, nobody tagged
+  assert.equal(w.rows.get(id)!.followUpSentAt, undefined);
+});
+
+test('reminder: several overdue tasks arrive in ONE message, oldest due date first', async () => {
+  const w = world();
+  const a = await openTicket(w); // T-0001, 4H, due 12:00
+  const b = await openTicket(w, { urgency: '1H' }); // T-0002, due 09:00
+  w.human(a.taskId, 'ok', '2026-11-09T08:10:00');
+  w.human(b.taskId, 'ok', '2026-11-09T08:10:00');
+  w.setClock('2026-11-09T12:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+  const msg = digests(w)[0];
+  assert.match(msg, /still open \(2\)/);
+  assert.ok(msg.indexOf('T-0002') < msg.indexOf('T-0001'));
+});
+
+test('reminder: a failed Telegram send is retried in the same hour and never sent twice', async () => {
+  const w = world();
+  const { taskId } = await openTicket(w);
+  w.human(taskId, 'ok', '2026-11-09T08:10:00');
+
+  w.setClock('2026-11-09T12:00:00');
+  w.setTelegramOk(false);
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 0);
+
+  w.setTelegramOk(true);
+  w.setClock('2026-11-09T12:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+  w.setClock('2026-11-09T12:10:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+});
+
+test('reminder: nothing overnight; the first reminder comes at 06:00', async () => {
+  const w = world();
+  const { taskId } = await openTicket(w);
+  w.human(taskId, 'ok', '2026-11-09T08:10:00');
+  w.setClock('2026-11-09T18:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 0);
+  w.setClock('2026-11-10T06:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
+  w.setClock('2026-11-10T06:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(digests(w).length, 1);
 });
