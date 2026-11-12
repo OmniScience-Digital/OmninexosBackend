@@ -93,15 +93,26 @@ test("steps already done are not repeated", () => {
     assert.deepEqual(dueEscalations(base({ now, followUpDone: true, gleedDone: true }), cal), []);
 });
 test("after downtime both steps come out in order", () => {
-    assert.deepEqual(dueEscalations(base({ now: sast("2026-11-09T14:00:00") }), cal), ["followUp", "gleed"]);
+    assert.deepEqual(dueEscalations(base({ now: sast("2026-11-09T14:00:00") }), cal), [
+        "followUp",
+        "gleed",
+    ]);
 });
 test("ASAP has no 50% / 70% steps (it has the hourly report instead)", () => {
-    const t = base({ urgencyMinutes: 0, submittedAt: sast("2026-11-09T10:00:00"), now: sast("2026-11-09T12:00:00") });
+    const t = base({
+        urgencyMinutes: 0,
+        submittedAt: sast("2026-11-09T10:00:00"),
+        now: sast("2026-11-09T12:00:00"),
+    });
     assert.deepEqual(dueEscalations(t, cal), []);
 });
 test("nothing is posted outside business hours; the step waits for 06:00", () => {
     // 1H task submitted 16:30: 30 min today, 30 min tomorrow. 50% is reached at 17:00 but nobody is paged at night.
-    const t = base({ urgencyMinutes: 60, submittedAt: sast("2026-11-09T16:30:00"), now: sast("2026-11-09T17:05:00") });
+    const t = base({
+        urgencyMinutes: 60,
+        submittedAt: sast("2026-11-09T16:30:00"),
+        now: sast("2026-11-09T17:05:00"),
+    });
     assert.deepEqual(dueEscalations(t, cal), []);
     assert.deepEqual(dueEscalations({ ...t, now: sast("2026-11-10T06:05:00") }, cal), ["followUp"]); // 35 min used
 });
@@ -142,7 +153,13 @@ test("digest: nothing to report gives no message", () => {
     assert.deepEqual(telegramOverdueDigest([]), []);
 });
 test("reminder: an open task past its due date is listed on the hour, but not before it is due", () => {
-    const t = (now, last = null) => reminderDue({ urgency: "4H", createdAt: sast("2026-11-09T08:00:00"), dueAt: sast("2026-11-09T12:00:00"), lastReminderAt: last ? sast(last) : null, now: sast(now) }, cal);
+    const t = (now, last = null) => reminderDue({
+        urgency: "4H",
+        createdAt: sast("2026-11-09T08:00:00"),
+        dueAt: sast("2026-11-09T12:00:00"),
+        lastReminderAt: last ? sast(last) : null,
+        now: sast(now),
+    }, cal);
     assert.equal(t("2026-11-09T11:05:00"), false); // not due yet
     assert.equal(t("2026-11-09T12:00:00"), true);
     assert.equal(t("2026-11-09T12:05:00"), true); // second run in the same window
@@ -151,14 +168,24 @@ test("reminder: an open task past its due date is listed on the hour, but not be
     assert.equal(t("2026-11-09T13:00:00", "2026-11-09T12:00:00"), true); // and again next hour
 });
 test("reminder: never outside business hours, and nothing without a due date", () => {
-    const base = { urgency: "4H", createdAt: sast("2026-11-09T08:00:00"), dueAt: sast("2026-11-09T12:00:00"), lastReminderAt: null };
+    const base = {
+        urgency: "4H",
+        createdAt: sast("2026-11-09T08:00:00"),
+        dueAt: sast("2026-11-09T12:00:00"),
+        lastReminderAt: null,
+    };
     assert.equal(reminderDue({ ...base, now: sast("2026-11-09T17:00:00") }, cal), false);
     assert.equal(reminderDue({ ...base, now: sast("2026-11-09T20:00:00") }, cal), false);
     assert.equal(reminderDue({ ...base, now: sast("2026-11-10T06:00:00") }, cal), true); // first thing next morning
     assert.equal(reminderDue({ ...base, dueAt: null, now: sast("2026-11-09T13:00:00") }, cal), false);
 });
 test("reminder: ASAP tasks join one hour after creation", () => {
-    const base = { urgency: "ASAP", createdAt: sast("2026-11-09T08:00:00"), dueAt: sast("2026-11-09T08:00:00"), lastReminderAt: null };
+    const base = {
+        urgency: "ASAP",
+        createdAt: sast("2026-11-09T08:00:00"),
+        dueAt: sast("2026-11-09T08:00:00"),
+        lastReminderAt: null,
+    };
     assert.equal(reminderDue({ ...base, now: sast("2026-11-09T08:05:00") }, cal), false);
     assert.equal(reminderDue({ ...base, now: sast("2026-11-09T09:00:00") }, cal), true);
 });

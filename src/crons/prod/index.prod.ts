@@ -44,24 +44,24 @@ const timeZone = 'Africa/Johannesburg';
 
 //Task 1am cron
 
-// cron.schedule(
-//   '0 1 * * *',
-//   async () => {
-//     try {
-//       logger.info('[CRON] Triggered 01:00 (2AM) Task Check');
+cron.schedule(
+  '0 1 * * *',
+  async () => {
+    try {
+      logger.info('[CRON] Triggered 01:00 (2AM) Task Check');
 
-//       const fleets = await getFleetvehicles();
-//       const tasks = await getFleetTasks();
+      const fleets = await getFleetvehicles();
+      const tasks = await getFleetTasks();
 
-//       if (fleets && tasks) {
-//         //call fleet controller
-//         await FleetController(fleets, tasks);
-//       } else {
-//         logger.warn('No valid progressive sites to process');
-//       }
-//     } catch (error: any) {
-//       logger.error('Runtime error:', error);
-//     }
-//   },
-//   { timezone: timeZone }
-// );
+      if (fleets && tasks) {
+        //call fleet controller
+        await FleetController(fleets, tasks);
+      } else {
+        logger.warn('No valid progressive sites to process');
+      }
+    } catch (error: any) {
+      logger.error('Runtime error:', error);
+    }
+  },
+  { timezone: timeZone }
+);

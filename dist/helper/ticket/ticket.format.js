@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.format.ts  
+// src/helper/ticket/ticket.format.ts
 // TICKETING: pure text builders for ClickUp and Telegram.
 import { DateTime } from "luxon";
 import { BOT_SIGNATURE, MAX_TELEGRAM_TEXT } from "./ticket.config.js";
@@ -14,7 +14,11 @@ export function buildDescription(p) {
     const who = p.assignees
         .map((a) => (a.fallback ? `${a.name} (not on ClickUp)` : a.name))
         .join(", ");
-    return [`Assignees: ${who}`, `Due Date: ${formatDue(p.dueAt)}`, `Required Outcome: ${p.requiredOutcome.trim()}`].join("\n");
+    return [
+        `Assignees: ${who}`,
+        `Due Date: ${formatDue(p.dueAt)}`,
+        `Required Outcome: ${p.requiredOutcome.trim()}`,
+    ].join("\n");
 }
 // ------------------------------------------------------------------ Telegram (legacy Markdown)
 // The shared Telegram service sends with parse_mode "Markdown", where _ * ` [ start formatting.
@@ -53,7 +57,9 @@ export function telegramOverdueDigest(items) {
             current = "";
         }
         if (!current) {
-            const header = messages.length === 0 ? `Overdue tasks, still open (${entries.length}):` : "Overdue tasks, continued:";
+            const header = messages.length === 0
+                ? `Overdue tasks, still open (${entries.length}):`
+                : "Overdue tasks, continued:";
             current = `${header}\n\n${entry}`;
         }
         else {
