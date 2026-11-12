@@ -31,6 +31,8 @@ executiontime(app);
 // **RAW body parser for Xero webhooks - MUST match exact route paths (HMAC verification needs the raw bytes)**
 app.use('/api/v1/xeroBillwebhook', express.raw({ type: '*/*', limit: '10mb' }));
 app.use('/api/v1/xeroQuotewebhook', express.raw({ type: '*/*', limit: '10mb' }));
+// TICKETING: ClickUp comment webhook (also HMAC signed, so it needs the raw bytes)
+app.use('/api/v1/clickupCommentWebhook', express.raw({ type: '*/*', limit: '1mb' }));
 
 // JSON parser for all other routes
 app.use(express.json({ limit: '10mb' }));

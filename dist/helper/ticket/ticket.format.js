@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.format.ts
+// src/helper/ticket/ticket.format.ts  (NEW FILE)
 // TICKETING: pure text builders for ClickUp and Telegram.
 import { DateTime } from "luxon";
 import { BOT_SIGNATURE, MAX_TELEGRAM_TEXT } from "./ticket.config.js";
@@ -6,6 +6,9 @@ export const formatTicketNumber = (n, pad = 4) => `T-${String(n).padStart(pad, "
 /** ClickUp task name: "T-0001, Fix the pump". */
 export const buildTaskName = (ticketNumber, title) => `${ticketNumber}, ${title.trim().replace(/\s+/g, " ")}`;
 export const formatDue = (d, zone = "Africa/Johannesburg") => `${DateTime.fromJSDate(d, { zone }).toFormat("ccc d LLL yyyy, HH:mm")} SAST`;
+/** "11 November 14:00" in Johannesburg time (used on every Telegram message). */
+export const formatDueShort = (d, zone = "Africa/Johannesburg") => DateTime.fromJSDate(d, { zone }).setLocale("en").toFormat("d LLLL HH:mm");
+const dueLine = (d) => (d ? `\nDue ${formatDueShort(d)}` : "");
 /** ClickUp task description (Assignees / Due Date / Required Outcome, as on the spreadsheet). */
 export function buildDescription(p) {
     const who = p.assignees
@@ -22,17 +25,19 @@ export function buildDescription(p) {
 // A task title like "fix pump_2" would make Telegram reject the whole message, so escape them.
 export const escapeTelegram = (text) => text.replace(/([_*`[\\])/g, "\\$1");
 const clip = (text, max = MAX_TELEGRAM_TEXT) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
-/** "T-0001, Title" then a new line then "<Name> sent this message: <text>". */
-export function telegramUpdateMessage(taskName, author, text) {
+/** "T-0001, Title", then "Due 11 November 14:00", then "<Name> sent this message: <text>". */
+export function telegramUpdateMessage(taskName, author, text, dueAt) {
     const body = text.trim() || "(no text)";
-    return clip(`${escapeTelegram(taskName)}\n${escapeTelegram(author)} sent this message: ${escapeTelegram(body)}`);
+    return clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\n${escapeTelegram(author)} sent this message: ${escapeTelegram(body)}`);
 }
 /** Posted to the group when a task still has no update at 50% / 70%. */
 export function telegramEscalationMessage(taskName, step, dueAt) {
     const pct = step === "followUp" ? "50%" : "70%";
-    return clip(`${escapeTelegram(taskName)}\nNo feedback received on this task yet (${pct} of the time used, due ${formatDue(dueAt)}).`);
+    return clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nNo feedback received on this task yet (${pct} of the time used).`);
 }
-export const telegramCreatedMessage = (taskName, assignees, dueAt) => clip(`${escapeTelegram(taskName)}\nTask created for ${escapeTelegram(assignees.join(", "))}, due ${formatDue(dueAt)}.`);
+/** ASAP tasks: reported every hour until the ClickUp task is closed. */
+export const telegramAsapMessage = (taskName, dueAt) => clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nThis ASAP task is still open.`);
+export const telegramCreatedMessage = (taskName, assignees, dueAt) => clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nTask created for ${escapeTelegram(assignees.join(", "))}.`);
 const tag = (id) => ({ type: "tag", user: { id } });
 /** 50%: tag the assignee(s) and ask for an update. */
 export function followUpComment(ticketNumber, assigneeIds, dueAt) {

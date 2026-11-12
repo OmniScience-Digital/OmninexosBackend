@@ -1,33 +1,22 @@
-// src/workers/ticket.worker.ts
+// src/workers/ticket.worker.ts  (NEW FILE)
 // TICKETING: runs the intake and sync services on their schedules.
 import { createWorker } from "../bull/bull.redis.js";
 import logger from "../utils/logger.js";
 import { clickUpTicketApi } from "../services/ticket.clickup.service.js";
 import { createEscalationTask } from "../services/clickUpfetch.service.js";
-import { getTelegramService } from "../services/telegram.service.js";
 import * as repo from "../repositories/dynamo.ticket.repository.js";
 import { processSubmittedTickets } from "../services/ticket.intake.service.js";
 import { syncOpenTickets } from "../services/ticket.sync.service.js";
+import { ticketCommonDeps, ticketSyncDeps } from "../services/ticket.deps.js";
 import { refreshRoster } from "../services/ticket.roster.service.js";
-import { GLEED_NAME, assigneeOverrides, escalationUserId, getBusinessCalendar, missingFlowVars, missingRosterVars, notifyOnCreate, numberPad, rosterEnabled, ticketFlowEnabled, } from "../helper/ticket/ticket.config.js";
-const common = () => ({
-    repo,
-    clickup: clickUpTicketApi,
-    now: () => new Date(),
-    cal: getBusinessCalendar(),
-    gleedName: GLEED_NAME,
-    escalationUserId: escalationUserId(),
-    telegramChatId: process.env.TASKING_TELEGRAM_CHAT_ID,
-    sendTelegram: (chatId, text) => getTelegramService().sendMessage(text, chatId),
-});
+import { assigneeOverrides, missingFlowVars, missingRosterVars, notifyOnCreate, numberPad, rosterEnabled, ticketFlowEnabled, } from "../helper/ticket/ticket.config.js";
 const intakeDeps = () => ({
-    ...common(),
+    ...ticketCommonDeps(),
     numberPad: numberPad(),
     overrides: assigneeOverrides(),
     notifyOnCreate: notifyOnCreate(),
     raiseEscalation: createEscalationTask,
 });
-const syncDeps = () => common();
 let warnedFlow = false;
 const enabled = () => {
     if (ticketFlowEnabled())
@@ -73,7 +62,7 @@ export const ticketSyncWorker = createWorker("ticket-sync", async () => {
     if (!enabled())
         return;
     try {
-        await syncOpenTickets(syncDeps());
+        await syncOpenTickets(ticketSyncDeps());
     }
     catch (err) {
         logger.error("\u274C Ticket sync run failed:", err);

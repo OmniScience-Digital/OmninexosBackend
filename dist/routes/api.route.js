@@ -8,6 +8,7 @@ import xeroApi from "./xero.auth.route.js";
 import xeroBillApi from "./xero.bill.route.js";
 import xeroQuoteWebhookApi from "./Xero.quotewebhook.route.js";
 import telegramWebhookApi from "./telegram.webhook.route.js"; // JOBCARD
+import ticketWebhookApi from "./ticket.webhook.route.js"; // TICKETING
 import apiCheck from "./api.check.route.js";
 import server from "./server.route.js";
 import businessUnit from "./xero.businessUnit.route.js";
@@ -17,6 +18,7 @@ import xeroQuoteSecuredApi from "./secured/xero.quote.secured.route.js";
 routes.use("/api/v1", xeroBillApi); // Most specific first — Xero INVOICE webhook (HMAC signed)
 routes.use("/api/v1", xeroQuoteWebhookApi); // Xero QUOTE webhook (HMAC signed)
 routes.use("/api/v1", telegramWebhookApi); // JOBCARD: Telegram bot webhook (secret-token protected)
+routes.use("/api/v1", ticketWebhookApi); // TICKETING: ClickUp comment webhook (HMAC signed)
 routes.use("/api/v1", stockControllerApi); // ClickUp webhook
 routes.use("/api/v1", clickupApi); // ClickUp webhook
 routes.use("/api/v1", clickupVifApi); // ClickUp webhook

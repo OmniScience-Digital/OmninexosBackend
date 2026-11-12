@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.config.ts
+// src/helper/ticket/ticket.config.ts  (NEW FILE)
 // TICKETING: every setting for the task / ticket system in one place.
 // See TICKETING.md in the project root for the environment variables and set-up steps.
 
@@ -95,6 +95,9 @@ export function getBusinessCalendar(env: NodeJS.ProcessEnv = process.env): Busin
 //   70%  -> tag Gleed
 // ---------------------------------------------------------------------------------------------
 export const ESCALATION = { followUpAt: 0.5, gleedAt: 0.7 } as const;
+
+/** ASAP tasks are not escalated at 50% / 70%. Instead Telegram is told they are still open every hour. */
+export const ASAP_REPORT_EVERY_MS = 60 * 60_000;
 
 /**
  * Who is tagged in ClickUp at 70% (and who gets a task when the person picked has left ClickUp).

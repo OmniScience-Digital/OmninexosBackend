@@ -1,4 +1,4 @@
-// src/helper/tokens/token.helper.ts  (MODIFIED - search "XERO-API-ESCALATION")
+// src/helper/tokens/token.helper.ts  (MODIFIED - search "XERO-API-ESCALATION" and "XERO-TAG")
 import { randomUUID } from 'crypto';
 import {
   getXeroConfig,
@@ -9,7 +9,7 @@ import {
 } from '../../repositories/dynamo.xeroconfig.repository';
 import { XeroTokenResponse } from '../../schema/xero.schema';
 import { decrypt, encrypt } from '../../services/encryption.service';
-import { createEscalationTask } from '../../services/clickUpfetch.service';
+import { createXeroEscalationTask } from '../xero/xero.escalation'; // XERO-TAG: creates the task AND tags xero_excalation_a / _b
 import logger from '../../utils/logger';
 
 const TENANT_ID = process.env.XERO_TENANT_ID!;
@@ -70,7 +70,7 @@ async function raiseTokenInvalidEscalation(reason: string): Promise<void> {
   if (escalationRaisedForCurrentOutage) return;
   escalationRaisedForCurrentOutage = true;
 
-  await createEscalationTask(
+  await createXeroEscalationTask(
     'Xero refresh token is invalid - manual re-auth required',
     `The Xero refresh token could not be redeemed for tenant ${TENANT_ID} and needs manual ` +
       `re-authentication.\n\nReason: ${reason}\n\n` +
@@ -203,7 +203,7 @@ export async function raiseXeroApiEscalation(
   if (apiEscalationsRaised.has(key)) return;
   apiEscalationsRaised.add(key);
   try {
-    await createEscalationTask(title, details);
+    await createXeroEscalationTask(title, details); // XERO-TAG: also tags xero_excalation_a / _b
   } catch (err) {
     apiEscalationsRaised.delete(key); // ClickUp itself failed: try again on the next failure
     logger.error(`[Xero] Could not create the ClickUp escalation task for "${key}":`, err);

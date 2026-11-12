@@ -1,11 +1,10 @@
-// src/services/ticket.services.test.ts  (MODIFIED - WORKSPACE-MEMBERS tests at the end)
+// src/services/ticket.services.test.ts  (run with: npm test)
 // Runs the real intake and sync services against in-memory fakes of DynamoDB, ClickUp and Telegram.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { processSubmittedTickets, type IntakeDeps, type TicketRepo } from './ticket.intake.service';
-import { syncOpenTickets, type SyncDeps } from './ticket.sync.service';
+import { syncOpenTickets, syncTicketByTaskId, type SyncDeps } from './ticket.sync.service';
 import type { ClickUpComment, ClickUpMember, TicketClickUp } from './ticket.clickup.service';
-import { membersFromWorkspaces, mergeMembers } from './ticket.clickup.service';
 import { resolveAssignees, resolveTicketAssignees } from '../helper/ticket/ticket.assignees';
 import { refreshRoster } from './ticket.roster.service';
 import { BOT_SIGNATURE, MAX_ATTEMPTS, getBusinessCalendar } from '../helper/ticket/ticket.config';
@@ -302,7 +301,7 @@ test("sync: a person's comment goes to Telegram once and counts as an update", a
 
   await syncOpenTickets(w.sync);
   assert.deepEqual(w.telegram, [
-    'T-0001, Fix the pump\nSean Fray sent this message: I have started',
+    'T-0001, Fix the pump\nDue 9 November 12:00\nSean Fray sent this message: I have started',
   ]);
   assert.equal(w.rows.get(id)!.hasUpdate, true);
 
@@ -382,15 +381,67 @@ test('sync: an update before 50% means no escalation at all', async () => {
   assert.equal(w.telegram.length, 1); // just the forwarded update
 });
 
-test('sync: no escalations outside business hours; they wait for 06:00', async () => {
+test('sync: ASAP is reported to Telegram every hour while open; no ClickUp comment, no tagging, a reply does not stop it', async () => {
+  const w = world();
+  const { id, taskId } = await openTicket(w, { urgency: 'ASAP' });
+
+  w.setClock('2026-11-09T08:55:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.telegram.length, 0);
+
+  w.setClock('2026-11-09T09:00:00');
+  await syncOpenTickets(w.sync);
+  assert.deepEqual(w.telegram, [
+    'T-0001, Fix the pump\nDue 9 November 08:00\nThis ASAP task is still open.',
+  ]);
+
+  w.setClock('2026-11-09T09:30:00'); // not again within the hour
+  await syncOpenTickets(w.sync);
+  assert.equal(w.telegram.length, 1);
+
+  w.human(taskId, 'Working on it', '2026-11-09T09:40:00'); // a reply is forwarded, but does not stop the reports
+  w.setClock('2026-11-09T10:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.telegram.filter((t) => t.includes('still open')).length, 2);
+  assert.equal(w.telegram.filter((t) => t.includes('sent this message')).length, 1);
+
+  assert.equal(w.posted.length, 0); // nothing posted to ClickUp, nobody tagged
+  assert.equal(w.rows.get(id)!.followUpSentAt, undefined);
+
+  w.tasks.get(taskId)!.statusType = 'closed'; // closing the task stops it
+  w.setClock('2026-11-09T11:00:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.rows.get(id)!.status, 'CLOSED');
+  assert.equal(w.telegram.filter((t) => t.includes('still open')).length, 2);
+});
+
+test('sync: ASAP reports wait for business hours and do not pile up overnight', async () => {
   const w = world('2026-11-09T16:30:00');
   await openTicket(w, { urgency: 'ASAP' });
-  w.setClock('2026-11-09T18:00:00');
+  w.setClock('2026-11-09T17:35:00'); // an hour later but after closing
   await syncOpenTickets(w.sync);
-  assert.equal(w.posted.length, 0);
-  w.setClock('2026-11-10T06:05:00');
+  assert.equal(w.telegram.length, 0);
+  w.setClock('2026-11-10T06:05:00'); // one report first thing, not one per missed hour
   await syncOpenTickets(w.sync);
-  assert.equal(w.posted.length, 2); // ASAP: follow-up and Gleed on the first check of the day
+  assert.equal(w.telegram.length, 1);
+  w.setClock('2026-11-10T06:30:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.telegram.length, 1);
+  w.setClock('2026-11-10T07:10:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.telegram.length, 2);
+});
+
+test('sync: an ASAP report that could not be sent is retried, not skipped', async () => {
+  const w = world();
+  await openTicket(w, { urgency: 'ASAP' });
+  w.setClock('2026-11-09T09:00:00');
+  w.setTelegramOk(false);
+  await syncOpenTickets(w.sync);
+  w.setTelegramOk(true);
+  w.setClock('2026-11-09T09:05:00');
+  await syncOpenTickets(w.sync);
+  assert.equal(w.telegram.length, 1);
 });
 
 test('sync: finished or deleted ClickUp tasks close the ticket and stop all follow-ups', async () => {
@@ -578,79 +629,34 @@ test('roster: an empty ClickUp answer never switches everyone off', async () => 
   assert.equal(r.table.get('1')!.isActive, true);
 });
 
-// ------------------------------------------------------------------ WORKSPACE-MEMBERS
-const TEAM_BODY = {
-  teams: [
-    {
-      id: '900',
-      members: [
-        {
-          user: {
-            id: 1,
-            username: 'Marco Venter',
-            email: 'marco@x.co',
-            profilePicture: 'https://a/1.png',
-          },
-        },
-        { user: { id: 5, username: 'Karin Dean', email: 'karin@x.co', profilePicture: null } },
-        { user: { id: 6, username: '', email: 'invited@x.co' } }, // no name yet: falls back to the email start
-        { user: { id: 'abc', username: 'Broken' } }, // no usable id: skipped
-        { user: { id: 7, username: '' } }, // no name and no email: skipped
-      ],
-    },
-    { id: '901', members: [{ user: { id: 8, username: 'Other Workspace' } }] },
-  ],
-};
+// ------------------------------------------------------------------ webhook wake-up
+test('webhook: a reply reaches Telegram straight away, only for the ticket it is about', async () => {
+  const w = world();
+  const a = await openTicket(w);
+  const b = await openTicket(w);
+  w.human(a.taskId, 'Started now', '2026-11-09T08:01:00');
+  w.human(b.taskId, 'Other ticket reply', '2026-11-09T08:01:00');
+  w.advance(60_000);
 
-test('workspace members: reads every workspace, names fall back to the email, unusable entries are skipped', () => {
-  const m = membersFromWorkspaces(TEAM_BODY);
-  assert.deepEqual(
-    m.map((x) => [x.id, x.username]),
-    [
-      [1, 'Marco Venter'],
-      [5, 'Karin Dean'],
-      [6, 'invited'],
-      [8, 'Other Workspace'],
-    ]
-  );
-  assert.equal(m[0].avatarUrl, 'https://a/1.png');
-  assert.equal(m[1].avatarUrl, undefined);
+  assert.equal(await syncTicketByTaskId(w.sync, a.taskId), true);
+  assert.equal(w.telegram.length, 1);
+  assert.match(w.telegram[0], /T-0001/);
+  assert.equal(w.rows.get(a.id)!.hasUpdate, true);
+  assert.equal(w.rows.get(b.id)!.hasUpdate, false); // the other ticket waits for its own wake-up or the 5 minute run
+
+  await syncOpenTickets(w.sync); // the safety-net run does not send the same reply twice
+  assert.equal(w.telegram.filter((t) => t.includes('Started now')).length, 1);
+  assert.equal(w.telegram.filter((t) => t.includes('Other ticket reply')).length, 1);
 });
 
-test('workspace members: TICKET_CLICKUP_TEAM_ID limits it to one workspace; odd answers give nobody', () => {
-  assert.deepEqual(
-    membersFromWorkspaces(TEAM_BODY, '901').map((x) => x.id),
-    [8]
-  );
-  assert.deepEqual(membersFromWorkspaces({}), []);
-  assert.deepEqual(membersFromWorkspaces(null), []);
-});
+test('webhook: a task with no open ticket is ignored, and a busy ticket is skipped without double sending', async () => {
+  const w = world();
+  const a = await openTicket(w);
+  assert.equal(await syncTicketByTaskId(w.sync, 'nope'), false);
 
-test('merge: one entry per user, the list wins, missing details are filled in', () => {
-  const merged = mergeMembers(
-    [{ id: 1, username: 'Marco Venter' }],
-    [
-      { id: 1, username: 'Marco V', email: 'marco@x.co', avatarUrl: 'https://a/1.png' },
-      { id: 5, username: 'Karin Dean' },
-    ]
-  );
-  assert.equal(merged.length, 2);
-  assert.deepEqual(merged[0], {
-    id: 1,
-    username: 'Marco Venter',
-    email: 'marco@x.co',
-    avatarUrl: 'https://a/1.png',
-  });
-  assert.equal(merged[1].username, 'Karin Dean');
-});
-
-test('merge: a picked person who is in the workspace but not on the list is now found, not sent to Gleed', () => {
-  const everyone = mergeMembers(
-    [{ id: 9, username: 'Gleed Nkosi' }],
-    [{ id: 5, username: 'Karin Dean' }]
-  );
-  const r = resolveTicketAssignees(['Karin Dean'], ['5'], everyone, 9, {}, 'Gleed');
-  assert.equal(r.assignees[0].clickupUserId, 5);
-  assert.equal(r.assignees[0].fallback, false);
-  assert.deepEqual(r.warnings, []);
+  w.human(a.taskId, 'Hello', '2026-11-09T08:01:00');
+  w.advance(60_000);
+  w.rows.get(a.id)!.lockedUntil = w.sync.now().getTime() + 60_000; // the 5 minute run holds it
+  await syncTicketByTaskId(w.sync, a.taskId);
+  assert.equal(w.telegram.length, 0); // skipped: that run will read the same comments
 });

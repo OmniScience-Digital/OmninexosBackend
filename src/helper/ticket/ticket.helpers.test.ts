@@ -1,7 +1,7 @@
 // src/helper/ticket/ticket.helpers.test.ts  (run with: npm test)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dueEscalations, type EscalationInput } from './escalation';
+import { asapReportDue, dueEscalations, type EscalationInput } from './escalation';
 import {
   buildDescription,
   buildTaskName,
@@ -10,6 +10,8 @@ import {
   formatTicketNumber,
   gleedComment,
   isBotText,
+  formatDueShort,
+  telegramAsapMessage,
   telegramEscalationMessage,
   telegramUpdateMessage,
 } from './ticket.format';
@@ -43,6 +45,25 @@ test('description lists assignees, due date and outcome, and flags fallbacks', (
     text,
     'Assignees: Marco, Byron (not on ClickUp)\nDue Date: Tue 10 Nov 2026, 13:00 SAST\nRequired Outcome: Pump running'
   );
+});
+
+test('every Telegram message carries the due date as "Due 11 November 14:00"', () => {
+  const due = sast('2026-11-11T14:00:00');
+  assert.equal(formatDueShort(due), '11 November 14:00');
+  assert.equal(
+    telegramUpdateMessage('T-0002, Test Ticket', 'Sean Fray', 'I have started', due),
+    'T-0002, Test Ticket\nDue 11 November 14:00\nSean Fray sent this message: I have started'
+  );
+  assert.equal(
+    telegramEscalationMessage('T-0002, Test Ticket', 'followUp', due),
+    'T-0002, Test Ticket\nDue 11 November 14:00\nNo feedback received on this task yet (50% of the time used).'
+  );
+  assert.equal(
+    telegramAsapMessage('T-0002, Test Ticket', due),
+    'T-0002, Test Ticket\nDue 11 November 14:00\nThis ASAP task is still open.'
+  );
+  // no due date known: the line is simply left out
+  assert.equal(telegramUpdateMessage('T-0002, x', 'A', 'hi'), 'T-0002, x\nA sent this message: hi');
 });
 
 test('Telegram text escapes legacy Markdown characters', () => {
@@ -135,26 +156,36 @@ test('after downtime both steps come out in order', () => {
   ]);
 });
 
-test('ASAP escalates on the first check inside business hours', () => {
+test('ASAP has no 50% / 70% steps (it has the hourly report instead)', () => {
   const t = base({
     urgencyMinutes: 0,
     submittedAt: sast('2026-11-09T10:00:00'),
-    now: sast('2026-11-09T10:05:00'),
-  });
-  assert.deepEqual(dueEscalations(t, cal), ['followUp', 'gleed']);
-});
-
-test('nothing is posted outside business hours, it waits for 06:00', () => {
-  const t = base({
-    urgencyMinutes: 0,
-    submittedAt: sast('2026-11-09T21:00:00'),
-    now: sast('2026-11-09T21:05:00'),
+    now: sast('2026-11-09T12:00:00'),
   });
   assert.deepEqual(dueEscalations(t, cal), []);
-  assert.deepEqual(dueEscalations({ ...t, now: sast('2026-11-10T06:05:00') }, cal), [
-    'followUp',
-    'gleed',
-  ]);
+});
+
+test('nothing is posted outside business hours; the step waits for 06:00', () => {
+  // 1H task submitted 16:30: 30 min today, 30 min tomorrow. 50% is reached at 17:00 but nobody is paged at night.
+  const t = base({
+    urgencyMinutes: 60,
+    submittedAt: sast('2026-11-09T16:30:00'),
+    now: sast('2026-11-09T17:05:00'),
+  });
+  assert.deepEqual(dueEscalations(t, cal), []);
+  assert.deepEqual(dueEscalations({ ...t, now: sast('2026-11-10T06:05:00') }, cal), ['followUp']); // 35 min used
+});
+
+test('ASAP report: first one hour after creation, then every hour, never at night', () => {
+  const createdAt = sast('2026-11-09T08:00:00');
+  const at = (iso: string, last: string | null = null) =>
+    asapReportDue({ createdAt, lastReportAt: last ? sast(last) : null, now: sast(iso) }, cal);
+  assert.equal(at('2026-11-09T08:59:00'), false);
+  assert.equal(at('2026-11-09T09:00:00'), true);
+  assert.equal(at('2026-11-09T09:30:00', '2026-11-09T09:00:00'), false);
+  assert.equal(at('2026-11-09T10:00:00', '2026-11-09T09:00:00'), true);
+  assert.equal(at('2026-11-09T18:00:00', '2026-11-09T16:00:00'), false); // after 17:00
+  assert.equal(at('2026-11-10T06:00:00', '2026-11-09T16:00:00'), true); // first thing next morning
 });
 
 test('overnight time does not count: 16H task submitted 16:00', () => {

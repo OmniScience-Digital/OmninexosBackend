@@ -1,4 +1,4 @@
-// src/workers/ticket.worker.ts
+// src/workers/ticket.worker.ts  (NEW FILE)
 // TICKETING: runs the intake and sync services on their schedules.
 import { createWorker } from '../bull/bull.redis';
 import logger from '../utils/logger';
@@ -7,7 +7,8 @@ import { createEscalationTask } from '../services/clickUpfetch.service';
 import { getTelegramService } from '../services/telegram.service';
 import * as repo from '../repositories/dynamo.ticket.repository';
 import { processSubmittedTickets, type IntakeDeps } from '../services/ticket.intake.service';
-import { syncOpenTickets, type SyncDeps } from '../services/ticket.sync.service';
+import { syncOpenTickets } from '../services/ticket.sync.service';
+import { ticketCommonDeps, ticketSyncDeps } from '../services/ticket.deps';
 import { refreshRoster } from '../services/ticket.roster.service';
 import {
   GLEED_NAME,
@@ -22,26 +23,13 @@ import {
   ticketFlowEnabled,
 } from '../helper/ticket/ticket.config';
 
-const common = () => ({
-  repo,
-  clickup: clickUpTicketApi,
-  now: () => new Date(),
-  cal: getBusinessCalendar(),
-  gleedName: GLEED_NAME,
-  escalationUserId: escalationUserId(),
-  telegramChatId: process.env.TASKING_TELEGRAM_CHAT_ID!,
-  sendTelegram: (chatId: string, text: string) => getTelegramService().sendMessage(text, chatId),
-});
-
 const intakeDeps = (): IntakeDeps => ({
-  ...common(),
+  ...ticketCommonDeps(),
   numberPad: numberPad(),
   overrides: assigneeOverrides(),
   notifyOnCreate: notifyOnCreate(),
   raiseEscalation: createEscalationTask,
 });
-
-const syncDeps = (): SyncDeps => common();
 
 let warnedFlow = false;
 const enabled = () => {
@@ -87,7 +75,7 @@ export const ticketSyncWorker = createWorker('ticket-sync', async () => {
   }
   if (!enabled()) return;
   try {
-    await syncOpenTickets(syncDeps());
+    await syncOpenTickets(ticketSyncDeps());
   } catch (err) {
     logger.error('❌ Ticket sync run failed:', err);
   }

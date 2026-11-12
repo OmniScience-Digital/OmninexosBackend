@@ -1,4 +1,4 @@
-// src/helper/ticket/ticket.format.ts
+// src/helper/ticket/ticket.format.ts  (NEW FILE)
 // TICKETING: pure text builders for ClickUp and Telegram.
 import { DateTime } from 'luxon';
 import { BOT_SIGNATURE, MAX_TELEGRAM_TEXT } from './ticket.config';
@@ -12,6 +12,12 @@ export const buildTaskName = (ticketNumber: string, title: string): string =>
 
 export const formatDue = (d: Date, zone = 'Africa/Johannesburg'): string =>
   `${DateTime.fromJSDate(d, { zone }).toFormat('ccc d LLL yyyy, HH:mm')} SAST`;
+
+/** "11 November 14:00" in Johannesburg time (used on every Telegram message). */
+export const formatDueShort = (d: Date, zone = 'Africa/Johannesburg'): string =>
+  DateTime.fromJSDate(d, { zone }).setLocale('en').toFormat('d LLLL HH:mm');
+
+const dueLine = (d: Date | null | undefined): string => (d ? `\nDue ${formatDueShort(d)}` : '');
 
 export interface ResolvedAssignee {
   name: string; // the name ticked on the form
@@ -43,11 +49,16 @@ export const escapeTelegram = (text: string): string => text.replace(/([_*`[\\])
 const clip = (text: string, max = MAX_TELEGRAM_TEXT): string =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
-/** "T-0001, Title" then a new line then "<Name> sent this message: <text>". */
-export function telegramUpdateMessage(taskName: string, author: string, text: string): string {
+/** "T-0001, Title", then "Due 11 November 14:00", then "<Name> sent this message: <text>". */
+export function telegramUpdateMessage(
+  taskName: string,
+  author: string,
+  text: string,
+  dueAt?: Date | null
+): string {
   const body = text.trim() || '(no text)';
   return clip(
-    `${escapeTelegram(taskName)}\n${escapeTelegram(author)} sent this message: ${escapeTelegram(body)}`
+    `${escapeTelegram(taskName)}${dueLine(dueAt)}\n${escapeTelegram(author)} sent this message: ${escapeTelegram(body)}`
   );
 }
 
@@ -57,21 +68,25 @@ export type EscalationStep = 'followUp' | 'gleed';
 export function telegramEscalationMessage(
   taskName: string,
   step: EscalationStep,
-  dueAt: Date
+  dueAt?: Date | null
 ): string {
   const pct = step === 'followUp' ? '50%' : '70%';
   return clip(
-    `${escapeTelegram(taskName)}\nNo feedback received on this task yet (${pct} of the time used, due ${formatDue(dueAt)}).`
+    `${escapeTelegram(taskName)}${dueLine(dueAt)}\nNo feedback received on this task yet (${pct} of the time used).`
   );
 }
+
+/** ASAP tasks: reported every hour until the ClickUp task is closed. */
+export const telegramAsapMessage = (taskName: string, dueAt?: Date | null): string =>
+  clip(`${escapeTelegram(taskName)}${dueLine(dueAt)}\nThis ASAP task is still open.`);
 
 export const telegramCreatedMessage = (
   taskName: string,
   assignees: string[],
-  dueAt: Date
+  dueAt?: Date | null
 ): string =>
   clip(
-    `${escapeTelegram(taskName)}\nTask created for ${escapeTelegram(assignees.join(', '))}, due ${formatDue(dueAt)}.`
+    `${escapeTelegram(taskName)}${dueLine(dueAt)}\nTask created for ${escapeTelegram(assignees.join(', '))}.`
   );
 
 // ------------------------------------------------------------------ ClickUp comment blocks

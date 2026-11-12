@@ -40,7 +40,7 @@ export const updateClickUpBusinessUnit = async (taskId, value) => {
  * re-auth via /api/v1/xero/connect). Swallows its own errors - an escalation task
  * failing to create must never mask or replace the original error being escalated.
  */
-export const createEscalationTask = async (title, description) => {
+export const createEscalationTask = async (title, description, assigneeIds = []) => {
     if (!SERVER_ESCALATIONS_LIST_ID) {
         logger.error(`[ClickUp] Server_Escalations env var not set - could not raise escalation task: ${title}`);
         return;
@@ -56,6 +56,7 @@ export const createEscalationTask = async (title, description) => {
                 name: title,
                 description,
                 priority: 1, // Urgent
+                ...(assigneeIds.length > 0 ? { assignees: assigneeIds } : {}),
             }),
         });
         if (!res.ok) {
