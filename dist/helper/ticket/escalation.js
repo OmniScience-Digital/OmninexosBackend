@@ -1,4 +1,4 @@
-// src/helper/ticket/escalation.ts 
+// src/helper/ticket/escalation.ts
 // TICKETING: decides which escalations are due for one ticket. Pure.
 //
 // Rules (from the spreadsheet):
@@ -10,7 +10,7 @@
 // not escalate overnight. Nothing is posted outside business hours; it waits for 06:00.
 import { businessMinutesBetween, isBusinessTime } from "./businessTime.js";
 import { DateTime } from "luxon";
-import { ASAP_FIRST_REMINDER_MS, ESCALATION, REMINDER_WINDOW_MINUTES } from "./ticket.config.js";
+import { ASAP_FIRST_REMINDER_MS, ESCALATION, REMINDER_WINDOW_MINUTES, } from "./ticket.config.js";
 export function dueEscalations(input, cal) {
     if (input.urgencyMinutes <= 0)
         return []; // ASAP: covered by the hourly overdue reminder (reminderDue)
@@ -40,6 +40,8 @@ export function reminderDue(input, cal) {
         return false;
     if (input.lastReminderAt && input.lastReminderAt.getTime() >= local.startOf("hour").toMillis())
         return false;
-    const overdueFrom = input.urgency === "ASAP" ? input.createdAt.getTime() + ASAP_FIRST_REMINDER_MS : input.dueAt.getTime();
+    const overdueFrom = input.urgency === "ASAP"
+        ? input.createdAt.getTime() + ASAP_FIRST_REMINDER_MS
+        : input.dueAt.getTime();
     return input.now.getTime() >= overdueFrom;
 }

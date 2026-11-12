@@ -111,13 +111,13 @@ test("overnight time does not count: 16H task submitted 16:00", () => {
     assert.deepEqual(dueEscalations({ ...t, now: sast("2026-11-10T07:00:00") }, cal), []);
 });
 // ---------------------------------------------------------------- hourly overdue reminder
-test("digest: one message, oldest first, with a count and each due date, special characters escaped", () => {
+test("digest: one message in task-number order, with a count and each due date, special characters escaped", () => {
     const [msg, ...rest] = telegramOverdueDigest([
-        { taskName: "T-0002, Later_task", dueAt: sast("2026-11-09T12:00:00") },
-        { taskName: "T-0001, Earlier", dueAt: sast("2026-11-09T09:00:00") },
+        { taskName: "T-0002, Earlier_task", dueAt: sast("2026-11-09T09:00:00") },
+        { taskName: "T-0001, Later", dueAt: sast("2026-11-09T12:00:00") },
     ]);
     assert.equal(rest.length, 0);
-    assert.equal(msg, "Overdue tasks, still open (2):\n\nT-0001, Earlier\nDue 9 November 09:00\n\nT-0002, Later\\_task\nDue 9 November 12:00");
+    assert.equal(msg, "Overdue tasks, still open (2):\n\nT-0001, Later\nDue 9 November 12:00\n\nT-0002, Earlier\\_task\nDue 9 November 09:00");
 });
 test("digest: a very long list is split into several messages, none over the Telegram limit", () => {
     const items = Array.from({ length: 120 }, (_, i) => ({
@@ -129,6 +129,14 @@ test("digest: a very long list is split into several messages, none over the Tel
     assert.ok(messages.every((m) => m.length < 4096));
     assert.match(messages[1], /^Overdue tasks, continued:/);
     assert.equal(messages.join("\n").match(/T-\d{4}/g).length, 120); // nothing dropped
+});
+test("digest: numbers are compared as numbers, not text", () => {
+    const [msg] = telegramOverdueDigest([
+        { taskName: "T-10000, c", dueAt: sast("2026-11-09T09:00:00") },
+        { taskName: "T-9999, b", dueAt: sast("2026-11-09T09:00:00") },
+        { taskName: "T-0002, a", dueAt: sast("2026-11-09T09:00:00") },
+    ]);
+    assert.ok(msg.indexOf("T-0002") < msg.indexOf("T-9999") && msg.indexOf("T-9999") < msg.indexOf("T-10000"));
 });
 test("digest: nothing to report gives no message", () => {
     assert.deepEqual(telegramOverdueDigest([]), []);

@@ -661,7 +661,7 @@ test('reminder: ASAP tasks have no 50/70% steps and join the hourly reminder one
   assert.equal(w.rows.get(id)!.followUpSentAt, undefined);
 });
 
-test('reminder: several overdue tasks arrive in ONE message, oldest due date first', async () => {
+test('reminder: several overdue tasks arrive in ONE message, in task-number order', async () => {
   const w = world();
   const a = await openTicket(w); // T-0001, 4H, due 12:00
   const b = await openTicket(w, { urgency: '1H' }); // T-0002, due 09:00
@@ -672,7 +672,7 @@ test('reminder: several overdue tasks arrive in ONE message, oldest due date fir
   assert.equal(digests(w).length, 1);
   const msg = digests(w)[0];
   assert.match(msg, /still open \(2\)/);
-  assert.ok(msg.indexOf('T-0002') < msg.indexOf('T-0001'));
+  assert.ok(msg.indexOf('T-0001') < msg.indexOf('T-0002')); // T-0002 is due earlier, but order follows the number
 });
 
 test('reminder: a failed Telegram send is retried in the same hour and never sent twice', async () => {

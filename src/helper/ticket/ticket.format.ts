@@ -76,18 +76,28 @@ export function telegramEscalationMessage(
   );
 }
 
+/** The number in "T-0042, Title" (42), compared as a number so T-10000 sorts after T-9999. */
+const taskNumberOf = (taskName: string): number => {
+  const m = /^T-(\d+)/.exec(taskName);
+  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+};
+
 export interface OverdueItem {
   taskName: string;
   dueAt: Date;
 }
 
 /**
- * The hourly reminder: every open task past its due date in one message (oldest first). Split into
+ * The hourly reminder: every open task past its due date in one message, in task-number order
+ * (T-0001, T-0002 ...). Split into
  * several messages only if the list is too long for Telegram.
  */
 export function telegramOverdueDigest(items: OverdueItem[]): string[] {
   const entries = [...items]
-    .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime())
+    .sort(
+      (a, b) =>
+        taskNumberOf(a.taskName) - taskNumberOf(b.taskName) || a.taskName.localeCompare(b.taskName)
+    )
     .map((i) => `${escapeTelegram(i.taskName)}\nDue ${formatDueShort(i.dueAt)}`);
   const messages: string[] = [];
   let current = '';
