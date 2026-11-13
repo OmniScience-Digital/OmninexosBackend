@@ -61,8 +61,6 @@ export const xeroBusinessUnitController = {
                 clickUpTaskidCrm1: existingQuote.clickUpTaskidCrm1,
                 clickUpTaskidCrm2: existingQuote.clickUpTaskidCrm2,
                 clickUpTaskidCrm5: existingQuote.clickUpTaskidCrm5,
-                clickUpTaskidCrm7: existingQuote.clickUpTaskidCrm7,
-                clickUpTaskidCrm9: existingQuote.clickUpTaskidCrm9,
                 quoteId: existingQuote.quoteId,
                 createdAt: existingQuote.createdAt,
             };

@@ -4,7 +4,7 @@ import FormData from "form-data";
 import { getAccessToken } from "../helper/tokens/token.helper.js";
 import logger from "../utils/logger.js";
 import { getXeroConfig, updateXeroConfig } from "../repositories/dynamo.xeroconfig.repository.js";
-import { createQuote, updateQuote, getQuoteByNumber, } from "../repositories/dynamo.quote.repository.js";
+import { createQuote, updateQuote, getQuoteById } from "../repositories/dynamo.quote.repository.js";
 import { getClickUpTask } from "./clickUpfetch.service.js";
 import { buildSteps, buildContentChangeSteps } from "./quoteTransition.js";
 import { clickupFetch } from "./clickup.throttle.js";
@@ -240,7 +240,7 @@ export async function pollQuotes() {
 }
 export async function handleQuoteStatuses(quote) {
     const baseQuoteNumber = getBaseQuoteNumber(quote.QuoteNumber);
-    const existingQuote = await getQuoteByNumber(baseQuoteNumber);
+    const existingQuote = await getQuoteById(quote.QuoteID);
     const quoteIssueDate = quote.DateString
         ? new Date(quote.DateString).toISOString()
         : new Date().toISOString();
@@ -277,8 +277,6 @@ export async function handleQuoteStatuses(quote) {
             clickUpTaskidCrm1: "",
             clickUpTaskidCrm2: "",
             clickUpTaskidCrm5: "",
-            clickUpTaskidCrm7: "",
-            clickUpTaskidCrm9: "",
             clickUpTaskidCRM050_Global: "",
             clickUpTaskidCRM050_SERVICES: "",
             clickUpTaskidCRM051_GLOBAL: "",
@@ -389,8 +387,6 @@ export async function handleQuoteStatuses(quote) {
         clickUpTaskidCrm1: existingQuote.clickUpTaskidCrm1,
         clickUpTaskidCrm2: existingQuote.clickUpTaskidCrm2,
         clickUpTaskidCrm5: existingQuote.clickUpTaskidCrm5,
-        clickUpTaskidCrm7: existingQuote.clickUpTaskidCrm7,
-        clickUpTaskidCrm9: existingQuote.clickUpTaskidCrm9,
         clickUpTaskidCRM050_Global: existingQuote.clickUpTaskidCRM050_Global,
         clickUpTaskidCRM050_SERVICES: existingQuote.clickUpTaskidCRM050_SERVICES,
         clickUpTaskidCRM051_GLOBAL: existingQuote.clickUpTaskidCRM051_GLOBAL,
@@ -908,7 +904,7 @@ function getRelatedTasksSection(quote, crm) {
             if (taskIds.crm033)
                 links.push(`CRM-33 - https://app.clickup.com/t/${taskIds.crm033}`);
             break;
-        // CRM1 and CRM9 remain unchanged (no links needed)
+        // CRM1 remains unchanged (no links needed)
     }
     if (links.length === 0)
         return "";
@@ -981,24 +977,4 @@ export function extractQuoteName(task) {
     // Take the first part before the first comma
     const quoteName = task.name.split(",")[0].trim();
     return quoteName || null;
-}
-export async function updateClickUpTaskCrm9(taskId, description) {
-    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
-    const res = await clickupFetch(url, {
-        method: "PUT",
-        headers: {
-            Authorization: API_TOKEN,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            description,
-        }),
-    });
-    if (!res.ok) {
-        const err = await res.text();
-        logger.error(`Failed to update ClickUp task ${taskId}: ${err}`);
-        throw new Error(`Failed to update ClickUp task ${taskId}: ${err}`);
-    }
-    logger.info(`Updated ClickUp task ${taskId}`);
-    return taskId;
 }
