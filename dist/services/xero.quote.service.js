@@ -338,6 +338,8 @@ export async function handleQuoteStatuses(quote) {
     const totalsChanged = existingQuote.subTotal !== quote.SubTotal ||
         existingQuote.taxTotal !== quote.TotalTax ||
         existingQuote.quTotal !== quote.Total;
+    const expiryChanged = new Date(existingQuote.quoteExpireyDate || 0).getTime() !==
+        new Date(quoteExpireyDate || 0).getTime();
     let steps;
     if (quote.Status !== existingQuote.quoteStatus) {
         const prevStatus = existingQuote.quoteStatus;
@@ -352,7 +354,7 @@ export async function handleQuoteStatuses(quote) {
             return;
         }
     }
-    else if (lineItemsChanged || totalsChanged) {
+    else if (lineItemsChanged || totalsChanged || expiryChanged) {
         // Xero's Status field stays ACCEPTED/DECLINED forever once reached - it never
         // flips back to SENT just because the quote was resent. So a resend of an
         // already-Accepted or already-Declined quote only ever shows up here, as a
@@ -826,7 +828,7 @@ ${totalsText}
     return { listid, status, description, customFields, comment, due_date, quoteUrl };
 }
 async function updateClickUpTask(taskId, quote, action, crm = "CRM1") {
-    const { topic, description, status } = await buildClickUpPayload(action, quote, crm);
+    const { topic, description, status, due_date } = await buildClickUpPayload(action, quote, crm);
     const url = `https://api.clickup.com/api/v2/task/${taskId}`;
     const res = await clickupFetch(url, {
         method: "PUT",
@@ -837,7 +839,8 @@ async function updateClickUpTask(taskId, quote, action, crm = "CRM1") {
         body: JSON.stringify({
             name: topic,
             description,
-            status: status,
+            status,
+            due_date,
         }),
     });
     if (!res.ok) {
