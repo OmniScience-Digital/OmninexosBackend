@@ -1,24 +1,26 @@
-const timeZone = 'Africa/Johannesburg';
-export {};
-// // Task 1:00 AM cron
-// cron.schedule(
-//   '0 1 * * *',
-//   async () => {
-//     try {
-//       logger.info('[CRON] Triggered 01:00 AM Fleet Task Check');
-//       const fleets = await getFleetvehicles();
-//       const tasks = await getFleetTasks();
-//       if (fleets && tasks) {
-//         await FleetController(fleets, tasks);
-//       } else {
-//         logger.warn('Fleet: No valid data to process');
-//       }
-//     } catch (error: any) {
-//       logger.error('Runtime error:', error);
-//     }
-//   },
-//   { timezone: timeZone }
-// );
+import cron from "node-cron";
+import logger from "../../utils/logger.js";
+import { getFleetvehicles } from "../../helper/fleet/fleet.helper.js";
+import { getFleetTasks } from "../../helper/task/task.helper.js";
+import { FleetController } from "../../controllers/cron.fleetController.js";
+const timeZone = "Africa/Johannesburg";
+// Task 1:00 AM cron
+cron.schedule("0 1 * * *", async () => {
+    try {
+        logger.info("[CRON] Triggered 01:00 AM Fleet Task Check");
+        const fleets = await getFleetvehicles();
+        const tasks = await getFleetTasks();
+        if (fleets && tasks) {
+            await FleetController(fleets, tasks);
+        }
+        else {
+            logger.warn("Fleet: No valid data to process");
+        }
+    }
+    catch (error) {
+        logger.error("Runtime error:", error);
+    }
+}, { timezone: timeZone });
 // // Task 1:10 AM cron - SINGLE COMBINED JOB FOR HRD + CUSTOMER RELATIONS
 // cron.schedule(
 //   '10 1 * * *',
