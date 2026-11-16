@@ -2,9 +2,12 @@ import 'dotenv/config';
 import {
   DynamoDBClient,
   QueryCommand,
+  ScanCommand,
   PutItemCommand,
   UpdateItemCommand,
+  TransactWriteItemsCommand,
 } from '@aws-sdk/client-dynamodb';
+import { createHash } from 'crypto';
 import { dynamoClient } from '../services/dynamo.service';
 
 const CATEGORY_TABLE = process.env.CATEGORY_TABLE!;
@@ -25,8 +28,114 @@ function normalizeKey(key: string): string {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Lookups. Names are matched on their normalised form so an item that exists is
+// always found, even if it is stored with different casing/punctuation (e.g.
+// "M8-Bolt" is the same item as "m8 bolt"). An exact index lookup is tried first
+// (fast path); only if that misses do we compare normalised names.
+// ─────────────────────────────────────────────────────────────────────────────
+async function queryAll(input: any): Promise<Record<string, any>[]> {
+  const items: Record<string, any>[] = [];
+  let startKey: Record<string, any> | undefined;
+  do {
+    const res: any = await dynamoClient.send(
+      new QueryCommand({ ...input, ExclusiveStartKey: startKey })
+    );
+    items.push(...(res.Items ?? []));
+    startKey = res.LastEvaluatedKey;
+  } while (startKey);
+  return items;
+}
+
+async function scanAll(tableName: string): Promise<Record<string, any>[]> {
+  const items: Record<string, any>[] = [];
+  let startKey: Record<string, any> | undefined;
+  do {
+    const res: any = await dynamoClient.send(
+      new ScanCommand({ TableName: tableName, ExclusiveStartKey: startKey })
+    );
+    items.push(...(res.Items ?? []));
+    startKey = res.LastEvaluatedKey;
+  } while (startKey);
+  return items;
+}
+
+async function findCategory(name: string) {
+  const exact = await queryAll({
+    TableName: CATEGORY_TABLE,
+    IndexName: 'categoriesByCategoryName',
+    KeyConditionExpression: '#name = :nameVal',
+    ExpressionAttributeNames: { '#name': 'categoryName' },
+    ExpressionAttributeValues: { ':nameVal': { S: name } },
+  });
+  if (exact.length > 0) return exact[0];
+  const all = await scanAll(CATEGORY_TABLE);
+  return all.find((i) => i.categoryName?.S && normalizeKey(i.categoryName.S) === name);
+}
+
+async function findSubcategory(categoryId: string, name: string) {
+  const exact = await queryAll({
+    TableName: SUBCATEGORY_TABLE,
+    IndexName: 'subCategoriesByCategoryIdAndSubcategoryName',
+    KeyConditionExpression: 'categoryId = :cid AND subcategoryName = :subName',
+    ExpressionAttributeValues: { ':cid': { S: categoryId }, ':subName': { S: name } },
+  });
+  if (exact.length > 0) return exact[0];
+  const inCategory = await queryAll({
+    TableName: SUBCATEGORY_TABLE,
+    IndexName: 'subCategoriesByCategoryIdAndSubcategoryName',
+    KeyConditionExpression: 'categoryId = :cid',
+    ExpressionAttributeValues: { ':cid': { S: categoryId } },
+  });
+  return inCategory.find((i) => i.subcategoryName?.S && normalizeKey(i.subcategoryName.S) === name);
+}
+
+async function findComponent(subcategoryId: string, key: string) {
+  const exact = await queryAll({
+    TableName: COMPONENTS_TABLE,
+    IndexName: 'componentsBySubcategoryIdAndComponentId',
+    KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
+    ExpressionAttributeValues: { ':sid': { S: subcategoryId }, ':cid': { S: key } },
+  });
+  if (exact.length > 0) return exact[0];
+  const inSubcategory = await queryAll({
+    TableName: COMPONENTS_TABLE,
+    IndexName: 'componentsBySubcategoryIdAndComponentId',
+    KeyConditionExpression: 'subcategoryId = :sid',
+    ExpressionAttributeValues: { ':sid': { S: subcategoryId } },
+  });
+  return inSubcategory.find((i) => i.componentId?.S && normalizeKey(i.componentId.S) === key);
+}
+
+// Id of the history row for one line of one ClickUp stock task. Deterministic so
+// it doubles as the idempotency key (see updateComponents). Without a task id
+// (should not happen) it falls back to a unique id, i.e. the old behaviour.
+function lineHistoryId(
+  taskId: string | undefined,
+  category: string,
+  subCategory: string,
+  componentKey: string
+): string {
+  if (!taskId) return `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const hash = createHash('sha1')
+    .update(`${category}|${subCategory}|${componentKey}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `stock-${taskId}-${hash}`;
+}
+
+// A transaction was cancelled because the history row (item index 1) already
+// exists, i.e. this line was applied by an earlier delivery of the same webhook.
+function isAlreadyApplied(err: any): boolean {
+  return (
+    err?.name === 'TransactionCanceledException' &&
+    err.CancellationReasons?.[1]?.Code === 'ConditionalCheckFailed'
+  );
+}
+
 export async function updateComponents(payload: any) {
-  const { username, timestamp, ...categories } = payload;
+  // taskId must be pulled out here, otherwise it would be treated as a category
+  const { username, timestamp, taskId, ...categories } = payload;
   const now = new Date().toISOString();
 
   for (const rawCategoryName of Object.keys(categories)) {
@@ -35,18 +144,10 @@ export async function updateComponents(payload: any) {
 
     // 1. Find or create Category
     let categoryId: string;
-    const catQuery = await dynamoClient.send(
-      new QueryCommand({
-        TableName: CATEGORY_TABLE,
-        IndexName: 'categoriesByCategoryName',
-        KeyConditionExpression: '#name = :nameVal',
-        ExpressionAttributeNames: { '#name': 'categoryName' },
-        ExpressionAttributeValues: { ':nameVal': { S: categoryName } },
-      })
-    );
+    const foundCategory = await findCategory(categoryName);
 
-    if (catQuery.Items && catQuery.Items.length > 0) {
-      categoryId = catQuery.Items[0].id.S!;
+    if (foundCategory) {
+      categoryId = foundCategory.id.S!;
     } else {
       categoryId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
       try {
@@ -84,20 +185,10 @@ export async function updateComponents(payload: any) {
 
       // Find or create SubCategory
       let subcategoryId: string;
-      const subQuery = await dynamoClient.send(
-        new QueryCommand({
-          TableName: SUBCATEGORY_TABLE,
-          IndexName: 'subCategoriesByCategoryIdAndSubcategoryName',
-          KeyConditionExpression: 'categoryId = :cid AND subcategoryName = :subName',
-          ExpressionAttributeValues: {
-            ':cid': { S: categoryId },
-            ':subName': { S: subName },
-          },
-        })
-      );
+      const foundSubcategory = await findSubcategory(categoryId, subName);
 
-      if (subQuery.Items && subQuery.Items.length > 0) {
-        subcategoryId = subQuery.Items[0].id.S!;
+      if (foundSubcategory) {
+        subcategoryId = foundSubcategory.id.S!;
       } else {
         subcategoryId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
         try {
@@ -137,147 +228,142 @@ export async function updateComponents(payload: any) {
         const componentKey = normalizeKey(rawKey);
         const { value } = subComponents[rawKey];
 
-        const compQuery = await dynamoClient.send(
-          new QueryCommand({
-            TableName: COMPONENTS_TABLE,
-            IndexName: 'componentsBySubcategoryIdAndComponentId',
-            KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
-            ExpressionAttributeValues: {
-              ':sid': { S: subcategoryId },
-              ':cid': { S: componentKey },
+        // Reject bad quantities up front. NaN would be written as the DynamoDB
+        // number "NaN" (ValidationException), and Component.currentStock is an
+        // Int in the GraphQL schema, so a decimal breaks the app's list query.
+        if (!Number.isInteger(value)) {
+          throw new Error(
+            `Invalid quantity "${value}" for "${rawKey}" (${rawCategoryName} / ${rawSubName}); expected a whole number`
+          );
+        }
+
+        const foundComponent = await findComponent(subcategoryId, componentKey);
+
+        // Deterministic per ClickUp task + line. It is the idempotency key: the
+        // history row below is written with attribute_not_exists(id) in the same
+        // transaction as the stock change, so a retried/duplicate webhook can never
+        // apply the same line twice, and a failure part-way through a task can be
+        // safely retried (lines already applied are skipped).
+        const historyRowId = lineHistoryId(taskId, rawCategoryName, rawSubName, componentKey);
+
+        const putHistory = (entityId: string, historyEntry: string) => ({
+          Put: {
+            TableName: HISTORY_TABLE,
+            Item: {
+              id: { S: historyRowId },
+              entityType: { S: 'COMPONENT' },
+              entityId: { S: entityId },
+              action: { S: 'STOCK_UPDATE' },
+              timestamp: { S: now },
+              details: { S: historyEntry },
+              createdAt: { S: now },
+              updatedAt: { S: now },
             },
-          })
-        );
+            ConditionExpression: 'attribute_not_exists(id)',
+          },
+        });
 
-        if (compQuery.Items && compQuery.Items.length > 0) {
-          // --- Update existing component ---
-          const existing = compQuery.Items[0];
-          const currentStock = Number(existing.currentStock.N);
-          const newStock = isWithdrawal ? currentStock - value : currentStock + value;
-
-          await dynamoClient.send(
-            new UpdateItemCommand({
-              TableName: COMPONENTS_TABLE,
-              Key: { id: { S: existing.id.S! } },
-              UpdateExpression: 'SET currentStock = :val, updatedAt = :upd',
-              ExpressionAttributeValues: {
-                ':val': { N: newStock.toString() },
-                ':upd': { S: now },
-              },
-            })
-          );
-
-          // --- Log history ---
-          const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
-          await dynamoClient.send(
-            new PutItemCommand({
-              TableName: HISTORY_TABLE,
-              Item: {
-                id: { S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}` },
-                entityType: { S: 'COMPONENT' },
-                entityId: { S: existing.id.S! },
-                action: { S: 'STOCK_UPDATE' },
-                timestamp: { S: now },
-                details: { S: historyEntry },
-                createdAt: { S: now },
-                updatedAt: { S: now },
-              },
-            })
-          );
-        } else {
-          // --- Create new component with race-condition handling ---
-          const newComponentId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        // Applies +/- value to an existing component atomically with its history.
+        const applyToExisting = async (existing: Record<string, any>) => {
+          const currentStock = Number(existing.currentStock?.N ?? 0);
+          const delta = isWithdrawal ? -value : value;
+          const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${currentStock + delta}\n`;
           try {
             await dynamoClient.send(
-              new PutItemCommand({
-                TableName: COMPONENTS_TABLE,
-                Item: {
-                  id: { S: newComponentId },
-                  subcategoryId: { S: subcategoryId },
-                  componentId: { S: componentKey },
-                  currentStock: { N: value.toString() },
-                  createdAt: { S: now },
-                  updatedAt: { S: now },
-                },
-                ConditionExpression:
-                  'attribute_not_exists(componentId) AND attribute_not_exists(subcategoryId)',
-              })
-            );
-
-            // Log history
-            const historyEntry = `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}\n`;
-            await dynamoClient.send(
-              new PutItemCommand({
-                TableName: HISTORY_TABLE,
-                Item: {
-                  id: { S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}` },
-                  entityType: { S: 'COMPONENT' },
-                  entityId: { S: newComponentId },
-                  action: { S: 'STOCK_UPDATE' },
-                  timestamp: { S: now },
-                  details: { S: historyEntry },
-                  createdAt: { S: now },
-                  updatedAt: { S: now },
-                },
+              new TransactWriteItemsCommand({
+                TransactItems: [
+                  {
+                    Update: {
+                      TableName: COMPONENTS_TABLE,
+                      Key: { id: { S: existing.id.S! } },
+                      // ADD is atomic, so concurrent submissions cannot lose updates
+                      UpdateExpression: 'SET updatedAt = :upd ADD currentStock :delta',
+                      ConditionExpression: 'attribute_exists(id)',
+                      ExpressionAttributeValues: {
+                        ':upd': { S: now },
+                        ':delta': { N: String(delta) },
+                      },
+                    },
+                  },
+                  putHistory(existing.id.S!, historyEntry),
+                ],
               })
             );
           } catch (err) {
-            // --- Race condition: another process created the component ---
-            await new Promise((resolve) => setTimeout(resolve, 50));
-
-            const retry = await dynamoClient.send(
-              new QueryCommand({
-                TableName: COMPONENTS_TABLE,
-                IndexName: 'componentsBySubcategoryIdAndComponentId',
-                KeyConditionExpression: 'subcategoryId = :sid AND componentId = :cid',
-                ExpressionAttributeValues: {
-                  ':sid': { S: subcategoryId },
-                  ':cid': { S: componentKey },
-                },
-              })
-            );
-
-            if (!retry.Items || retry.Items.length === 0) {
-              throw new Error(
-                `Component creation failed and item not found in retry: ${componentKey}`
-              );
+            if (isAlreadyApplied(err)) {
+              console.warn(`[stock] Line already applied, skipping: ${historyRowId}`);
+              return;
             }
+            throw err;
+          }
+        };
 
-            const existing = retry.Items[0];
-            const currentStock = Number(existing.currentStock.N);
-            const newStock = isWithdrawal ? currentStock - value : currentStock + value;
+        if (foundComponent) {
+          // --- Update existing component ---
+          await applyToExisting(foundComponent);
+          continue;
+        }
 
-            // Update the existing item
-            await dynamoClient.send(
-              new UpdateItemCommand({
-                TableName: COMPONENTS_TABLE,
-                Key: { id: { S: existing.id.S! } },
-                UpdateExpression: 'SET currentStock = :val, updatedAt = :upd',
-                ExpressionAttributeValues: {
-                  ':val': { N: newStock.toString() },
-                  ':upd': { S: now },
+        // --- Component does not exist ---
+        if (isWithdrawal) {
+          // Never invent stock from a withdrawal. The mobile app blocks this; this
+          // is the safety net. Skip (don't throw) so ClickUp doesn't retry forever.
+          console.error(
+            `[stock] Withdrawal for unknown component "${componentKey}" (${rawCategoryName} / ${rawSubName}) ignored`
+          );
+          continue;
+        }
+
+        // --- Create new component (atomic with its history) ---
+        const newComponentId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        try {
+          await dynamoClient.send(
+            new TransactWriteItemsCommand({
+              TransactItems: [
+                {
+                  Put: {
+                    TableName: COMPONENTS_TABLE,
+                    Item: {
+                      id: { S: newComponentId },
+                      subcategoryId: { S: subcategoryId },
+                      componentId: { S: componentKey },
+                      // The app shows componentName (falls back to "Unnamed Component")
+                      componentName: { S: rawKey.trim() },
+                      currentStock: { N: value.toString() },
+                      createdAt: { S: now },
+                      updatedAt: { S: now },
+                    },
+                    ConditionExpression: 'attribute_not_exists(id)',
+                  },
                 },
-              })
-            );
+                putHistory(
+                  newComponentId,
+                  `${username} @ ${timestamp}, intake: ${componentKey}, before: 0, after: ${value}\n`
+                ),
+              ],
+            })
+          );
+        } catch (err: any) {
+          if (isAlreadyApplied(err)) {
+            console.warn(`[stock] Line already applied, skipping: ${historyRowId}`);
+            continue;
+          }
+          // Log the REAL failure instead of masking it behind the retry below.
+          console.error(
+            `[stock] Creating component "${componentKey}" failed, checking for a concurrent insert:`,
+            err
+          );
+          // --- Race condition: another process created the component ---
+          await new Promise((resolve) => setTimeout(resolve, 50));
 
-            // Log history for the update
-            const historyEntry = `${username} @ ${timestamp}, ${isWithdrawal ? 'withdrew' : 'intake'}: ${componentKey}, before: ${currentStock}, after: ${newStock}\n`;
-            await dynamoClient.send(
-              new PutItemCommand({
-                TableName: HISTORY_TABLE,
-                Item: {
-                  id: { S: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}` },
-                  entityType: { S: 'COMPONENT' },
-                  entityId: { S: existing.id.S! },
-                  action: { S: 'STOCK_UPDATE' },
-                  timestamp: { S: now },
-                  details: { S: historyEntry },
-                  createdAt: { S: now },
-                  updatedAt: { S: now },
-                },
-              })
+          const retried = await findComponent(subcategoryId, componentKey);
+
+          if (!retried) {
+            throw new Error(
+              `Component creation failed for "${componentKey}": ${err?.message ?? err}`
             );
           }
+          await applyToExisting(retried);
         }
       }
     }
